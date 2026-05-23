@@ -7,6 +7,7 @@ import (
 
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/identity"
+	"github.com/divord97/ccc/internal/domain/routing"
 	infraMySQL "github.com/divord97/ccc/internal/infrastructure/mysql"
 	infraRedis "github.com/divord97/ccc/internal/infrastructure/redis"
 	httpRouter "github.com/divord97/ccc/internal/interfaces/http"
@@ -33,7 +34,7 @@ func main() {
 	redisClient := infraRedis.NewRedisClient(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	defer redisClient.Close()
 
-	// Repositories
+	// --- Phase 0 Repositories ---
 	tenantRepo := infraMySQL.NewTenantRepo(db)
 	tenantSettingsRepo := infraMySQL.NewTenantSettingsRepo(db)
 	userRepo := infraMySQL.NewUserRepo(db)
@@ -42,31 +43,59 @@ func main() {
 	skillGroupMemberRepo := infraMySQL.NewSkillGroupMemberRepo(db)
 	auditLogRepo := infraMySQL.NewAuditLogRepo(db)
 
-	// Domain services
+	// --- Phase 1 Repositories ---
+	ivrFlowRepo := infraMySQL.NewIVRFlowRepo(db)
+	ivrFlowVersionRepo := infraMySQL.NewIVRFlowVersionRepo(db)
+	carrierRepo := infraMySQL.NewCarrierRepo(db)
+	sipTrunkRepo := infraMySQL.NewSIPTrunkRepo(db)
+	phoneNumberRepo := infraMySQL.NewPhoneNumberRepo(db)
+	recordingRepo := infraMySQL.NewRecordingRepo(db)
+	voicemailRepo := infraMySQL.NewVoicemailRepo(db)
+	callNumberTagRepo := infraMySQL.NewCallNumberTagRepo(db)
+	autoTagRuleRepo := infraMySQL.NewAutoTagRuleRepo(db)
+
+	// --- Domain Services ---
 	tenantSvc := identity.NewTenantService(tenantRepo, tenantSettingsRepo)
 	userSvc := identity.NewUserService(userRepo, agentRepo)
 	agentSvc := identity.NewAgentService(agentRepo, userRepo, tenantSettingsRepo)
 	skillGroupSvc := identity.NewSkillGroupService(skillGroupRepo, skillGroupMemberRepo)
+	ivrFlowSvc := routing.NewIVRFlowService(ivrFlowRepo, ivrFlowVersionRepo)
 
-	// Rate limiter
+	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
 
-	// HTTP handlers
+	// --- HTTP Handlers ---
 	tenantHandler := handler.NewTenantHandler(tenantSvc)
 	userHandler := handler.NewUserHandler(userSvc)
 	agentHandler := handler.NewAgentHandler(agentSvc)
 	skillGroupHandler := handler.NewSkillGroupHandler(skillGroupSvc)
+	ivrFlowHandler := handler.NewIVRFlowHandler(ivrFlowSvc)
+	carrierHandler := handler.NewCarrierHandler(carrierRepo)
+	sipTrunkHandler := handler.NewSIPTrunkHandler(sipTrunkRepo)
+	phoneNumberHandler := handler.NewPhoneNumberHandler(phoneNumberRepo)
+	recordingHandler := handler.NewRecordingHandler(recordingRepo)
+	voicemailHandler := handler.NewVoicemailHandler(voicemailRepo)
+	callNumberTagHandler := handler.NewCallNumberTagHandler(callNumberTagRepo)
+	autoTagRuleHandler := handler.NewAutoTagRuleHandler(autoTagRuleRepo)
 
-	// Router
+	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
-		TenantHandler:     tenantHandler,
-		UserHandler:       userHandler,
-		AgentHandler:      agentHandler,
-		SkillGroupHandler: skillGroupHandler,
-		RateLimiter:       rateLimiter,
-		AuditLogRepo:      auditLogRepo,
-		JWTSecret:         cfg.JWT.Secret,
-		Logger:            logger,
+		TenantHandler:        tenantHandler,
+		UserHandler:          userHandler,
+		AgentHandler:         agentHandler,
+		SkillGroupHandler:    skillGroupHandler,
+		IVRFlowHandler:       ivrFlowHandler,
+		CarrierHandler:       carrierHandler,
+		SIPTrunkHandler:      sipTrunkHandler,
+		PhoneNumberHandler:   phoneNumberHandler,
+		RecordingHandler:     recordingHandler,
+		VoicemailHandler:     voicemailHandler,
+		CallNumberTagHandler: callNumberTagHandler,
+		AutoTagRuleHandler:   autoTagRuleHandler,
+		RateLimiter:          rateLimiter,
+		AuditLogRepo:         auditLogRepo,
+		JWTSecret:            cfg.JWT.Secret,
+		Logger:               logger,
 	})
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)

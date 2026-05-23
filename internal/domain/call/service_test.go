@@ -1,0 +1,144 @@
+package call
+
+import (
+	"context"
+	"testing"
+	"time"
+
+	"github.com/divord97/ccc/pkg/snowflake"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func init() {
+	_ = snowflake.Init(1)
+}
+
+func TestCallService_CreateInboundCall(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	ctx := context.Background()
+
+	ivrID := int64(999)
+	c, err := svc.CreateInboundCall(ctx, CreateCallInput{
+		TenantID:  1,
+		Direction: DirectionInbound,
+		Caller:    "+8613800001111",
+		Callee:    "+862188880001",
+		IVRFlowID: &ivrID,
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, DirectionInbound, c.Direction)
+	assert.Equal(t, CallTypeNormal, c.CallType)
+	assert.Equal(t, MediaTypeAudio, c.MediaType)
+	assert.Equal(t, CallStatusIVR, c.Status)
+	assert.Equal(t, "+8613800001111", c.Caller)
+}
+
+func TestCallService_CreateInboundCall_DefaultDirection(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+
+	c, err := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID: 1, Caller: "+86138", Callee: "+86021",
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, DirectionInbound, c.Direction)
+	assert.Equal(t, CallTypeNormal, c.CallType)
+}
+
+func TestCallService_RecordIVRTracking_NodeSequence(t *testing.T) {
+	trackRepo := NewMockIVRTrackingRepo()
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), trackRepo)
+	ctx := context.Background()
+
+	c, _ := svc.CreateInboundCall(ctx, CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+
+	nodes := []struct {
+		nodeID   string
+		nodeType string
+	}{
+		{"start_1", "start"},
+		{"play_1", "play"},
+		{"dtmf_1", "collect_dtmf"},
+		{"transfer_1", "transfer_to_agent"},
+	}
+
+	for _, n := range nodes {
+		now := time.Now()
+		err := svc.RecordIVRTracking(ctx, &IVRTracking{
+			CallID:    c.ID,
+			TenantID:  c.TenantID,
+			IVRFlowID: 100,
+			NodeID:    n.nodeID,
+			NodeType:  n.nodeType,
+			EnteredAt: now,
+		})
+		require.NoError(t, err)
+	}
+
+	tracking, err := svc.GetIVRTracking(ctx, c.ID)
+	require.NoError(t, err)
+	assert.Len(t, tracking, 4)
+	assert.Equal(t, "start_1", tracking[0].NodeID)
+	assert.Equal(t, "transfer_to_agent", tracking[3].NodeType)
+}
+
+func TestCallService_EndCall_WithHangupReason(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	ctx := context.Background()
+
+	c, _ := svc.CreateInboundCall(ctx, CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+
+	ended, err := svc.EndCall(ctx, c.ID, HangupNormal)
+	require.NoError(t, err)
+	assert.Equal(t, CallStatusCompleted, ended.Status)
+	assert.NotNil(t, ended.HangupReason)
+	assert.Equal(t, HangupNormal, *ended.HangupReason)
+	assert.NotNil(t, ended.EndedAt)
+}
+
+func TestCallService_EndCall_AlreadyEnded(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	ctx := context.Background()
+
+	c, _ := svc.CreateInboundCall(ctx, CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+	_, _ = svc.EndCall(ctx, c.ID, HangupNormal)
+
+	_, err := svc.EndCall(ctx, c.ID, HangupNormal)
+	assert.ErrorIs(t, err, ErrCallAlreadyEnded)
+}
+
+func TestCallService_EndCall_NotFound(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+
+	_, err := svc.EndCall(context.Background(), 99999, HangupNormal)
+	assert.ErrorIs(t, err, ErrCallNotFound)
+}
+
+func TestCallService_CalculateDurations(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+
+	base := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	c := &Call{ID: 1, TenantID: 1, StartedAt: base}
+
+	events := []*CallEvent{
+		{Event: "call_created", CreatedAt: base},
+		{Event: "ivr_completed", CreatedAt: base.Add(15 * time.Second)},
+		{Event: "queue_entered", CreatedAt: base.Add(15 * time.Second)},
+		{Event: "agent_ringing", CreatedAt: base.Add(25 * time.Second)},
+		{Event: "call_answered", CreatedAt: base.Add(30 * time.Second)},
+	}
+
+	svc.CalculateDurations(c, events)
+
+	assert.Equal(t, 15, c.IVRDurationSec)
+	assert.Equal(t, 10, c.QueueDurationSec)
+	assert.Equal(t, 5, c.RingDurationSec)
+}
