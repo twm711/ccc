@@ -337,3 +337,77 @@ func (r *MockSkillGroupMemberRepo) Exists(_ context.Context, skillGroupID, agent
 	}
 	return false, nil
 }
+
+// --- Mock AgentPresence Repos ---
+
+type MockAgentPresenceRepo struct {
+	mu   sync.RWMutex
+	data map[int64]*AgentPresence
+}
+
+func NewMockAgentPresenceRepo() *MockAgentPresenceRepo {
+	return &MockAgentPresenceRepo{data: make(map[int64]*AgentPresence)}
+}
+
+func (r *MockAgentPresenceRepo) Upsert(_ context.Context, p *AgentPresence) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[p.AgentID] = p
+	return nil
+}
+
+func (r *MockAgentPresenceRepo) GetByAgentID(_ context.Context, agentID int64) (*AgentPresence, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.data[agentID], nil
+}
+
+func (r *MockAgentPresenceRepo) ListByTenant(_ context.Context, tenantID int64) ([]*AgentPresence, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var result []*AgentPresence
+	for _, p := range r.data {
+		if p.TenantID == tenantID {
+			result = append(result, p)
+		}
+	}
+	return result, nil
+}
+
+type MockAgentPresenceLogRepo struct {
+	mu   sync.RWMutex
+	logs []*AgentPresenceLog
+}
+
+func NewMockAgentPresenceLogRepo() *MockAgentPresenceLogRepo {
+	return &MockAgentPresenceLogRepo{}
+}
+
+func (r *MockAgentPresenceLogRepo) Create(_ context.Context, l *AgentPresenceLog) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logs = append(r.logs, l)
+	return nil
+}
+
+func (r *MockAgentPresenceLogRepo) ListByAgent(_ context.Context, agentID int64, offset, limit int) ([]*AgentPresenceLog, int64, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var result []*AgentPresenceLog
+	for _, l := range r.logs {
+		if l.AgentID == agentID {
+			result = append(result, l)
+		}
+	}
+	total := int64(len(result))
+	if offset < len(result) {
+		end := offset + limit
+		if end > len(result) {
+			end = len(result)
+		}
+		result = result[offset:end]
+	} else {
+		result = nil
+	}
+	return result, total, nil
+}

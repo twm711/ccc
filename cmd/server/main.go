@@ -67,13 +67,23 @@ func main() {
 	dncRepo := infraMySQL.NewDNCRepo(db)
 	callTagRepo := infraMySQL.NewCallTagAssignmentRepo(db)
 
+	// --- Phase 3 Repositories ---
+	callbackRepo := infraMySQL.NewCallbackRequestRepo(db)
+	agentPresenceRepo := infraMySQL.NewAgentPresenceRepo(db)
+	agentPresenceLogRepo := infraMySQL.NewAgentPresenceLogRepo(db)
+	webhookConfigRepo := infraMySQL.NewWebhookConfigRepo(db)
+	screenPopConfigRepo := infraMySQL.NewScreenPopConfigRepo(db)
+	quickReplyRepo := infraMySQL.NewQuickReplyRepo(db)
+	smsConfigRepo := infraMySQL.NewSmsConfigRepo(db)
+
 	// --- Domain Services ---
 	tenantSvc := identity.NewTenantService(tenantRepo, tenantSettingsRepo)
 	userSvc := identity.NewUserService(userRepo, agentRepo)
 	agentSvc := identity.NewAgentService(agentRepo, userRepo, tenantSettingsRepo)
 	skillGroupSvc := identity.NewSkillGroupService(skillGroupRepo, skillGroupMemberRepo)
 	ivrFlowSvc := routing.NewIVRFlowService(ivrFlowRepo, ivrFlowVersionRepo)
-	callSvc := call.NewCallService(callRepo, callEventRepo, ivrTrackingRepo)
+	callSvc := call.NewCallService(callRepo, callEventRepo, ivrTrackingRepo, callbackRepo)
+	agentPresenceSvc := identity.NewAgentPresenceService(agentPresenceRepo, agentPresenceLogRepo)
 	routingSvc := telephony.NewRoutingService(routingRuleRepo)
 	cliSvc := telephony.NewCLIPolicyService(cliPolicyRepo, phoneNumberRepo)
 	dncSvc := integration.NewDNCService(dncRepo)
@@ -81,6 +91,7 @@ func main() {
 
 	// --- Application Services ---
 	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, nil)
+	_ = callbackRepo // used via callSvc
 
 	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
@@ -102,6 +113,12 @@ func main() {
 	cliPolicyHandler := handler.NewCLIPolicyHandler(cliPolicyRepo)
 	dncHandler := handler.NewDNCHandler(dncSvc, dncRepo)
 	callHandler := handler.NewCallHandler(callSvc, outboundSvc, callTagSvc)
+	callControlHandler := handler.NewCallControlHandler(callSvc)
+	agentPresenceHandler := handler.NewAgentPresenceHandler(agentPresenceSvc)
+	webhookConfigHandler := handler.NewWebhookConfigHandler(webhookConfigRepo)
+	screenPopConfigHandler := handler.NewScreenPopConfigHandler(screenPopConfigRepo)
+	quickReplyHandler := handler.NewQuickReplyHandler(quickReplyRepo)
+	smsConfigHandler := handler.NewSmsConfigHandler(smsConfigRepo)
 
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
@@ -121,6 +138,12 @@ func main() {
 		CLIPolicyHandler:     cliPolicyHandler,
 		DNCHandler:           dncHandler,
 		CallHandler:          callHandler,
+		CallControlHandler:    callControlHandler,
+		AgentPresenceHandler:  agentPresenceHandler,
+		WebhookConfigHandler:  webhookConfigHandler,
+		ScreenPopConfigHandler: screenPopConfigHandler,
+		QuickReplyHandler:     quickReplyHandler,
+		SmsConfigHandler:      smsConfigHandler,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,

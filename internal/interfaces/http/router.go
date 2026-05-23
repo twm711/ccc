@@ -34,6 +34,14 @@ type RouterDeps struct {
 	DNCHandler         *handler.DNCHandler
 	CallHandler        *handler.CallHandler
 
+	// Phase 3
+	CallControlHandler    *handler.CallControlHandler
+	AgentPresenceHandler  *handler.AgentPresenceHandler
+	WebhookConfigHandler  *handler.WebhookConfigHandler
+	ScreenPopConfigHandler *handler.ScreenPopConfigHandler
+	QuickReplyHandler     *handler.QuickReplyHandler
+	SmsConfigHandler      *handler.SmsConfigHandler
+
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
 	AuditLogRepo platform.AuditLogRepository
@@ -179,6 +187,53 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Post("/internal-dial", deps.CallHandler.InternalDial)
 			r.Post("/{id}/tags", deps.CallHandler.AddTag)
 			r.Delete("/{id}/tags/{tagId}", deps.CallHandler.RemoveTag)
+			r.Post("/{id}/hold", deps.CallControlHandler.Hold)
+			r.Post("/{id}/retrieve", deps.CallControlHandler.Retrieve)
+			r.Post("/{id}/blind-transfer", deps.CallControlHandler.BlindTransfer)
+			r.Post("/{id}/dtmf", deps.CallControlHandler.SendDTMF)
+		})
+
+		r.Post("/callbacks", deps.CallControlHandler.RequestCallback)
+
+		// --- Phase 3 Routes ---
+
+		r.Route("/agent-presence", func(r chi.Router) {
+			r.Post("/check-in", deps.AgentPresenceHandler.CheckIn)
+			r.Post("/{agentId}/check-out", deps.AgentPresenceHandler.CheckOut)
+			r.Post("/{agentId}/transition", deps.AgentPresenceHandler.Transition)
+			r.Post("/{agentId}/break", deps.AgentPresenceHandler.SetBreak)
+			r.Post("/{agentId}/acw", deps.AgentPresenceHandler.SetACW)
+			r.Post("/{agentId}/work-mode", deps.AgentPresenceHandler.SwitchWorkMode)
+			r.Get("/{agentId}", deps.AgentPresenceHandler.GetPresence)
+		})
+
+		r.Route("/webhook-configs", func(r chi.Router) {
+			r.Post("/", deps.WebhookConfigHandler.Create)
+			r.Get("/", deps.WebhookConfigHandler.List)
+			r.Put("/{id}", deps.WebhookConfigHandler.Update)
+			r.Delete("/{id}", deps.WebhookConfigHandler.Delete)
+		})
+
+		r.Route("/screen-pop-configs", func(r chi.Router) {
+			r.Post("/", deps.ScreenPopConfigHandler.Create)
+			r.Get("/", deps.ScreenPopConfigHandler.List)
+			r.Put("/{id}", deps.ScreenPopConfigHandler.Update)
+			r.Delete("/{id}", deps.ScreenPopConfigHandler.Delete)
+		})
+
+		r.Route("/quick-replies", func(r chi.Router) {
+			r.Post("/", deps.QuickReplyHandler.Create)
+			r.Get("/", deps.QuickReplyHandler.List)
+			r.Put("/{id}", deps.QuickReplyHandler.Update)
+			r.Delete("/{id}", deps.QuickReplyHandler.Delete)
+			r.Get("/available", deps.QuickReplyHandler.Available)
+		})
+
+		r.Route("/sms-configs", func(r chi.Router) {
+			r.Post("/", deps.SmsConfigHandler.Create)
+			r.Get("/", deps.SmsConfigHandler.List)
+			r.Put("/{id}", deps.SmsConfigHandler.Update)
+			r.Delete("/{id}", deps.SmsConfigHandler.Delete)
 		})
 	})
 

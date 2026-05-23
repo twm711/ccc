@@ -59,17 +59,23 @@ func (s *Service) Dial(ctx context.Context, req DialRequest) (*call.Call, error)
 	if err != nil {
 		return nil, fmt.Errorf("CLI select: %w", err)
 	}
+	if cli == nil {
+		return nil, fmt.Errorf("CLI select: no phone number available")
+	}
 
 	// 4. Create call record
 	agentID := req.AgentUserID
-	c, err := s.callSvc.CreateOutboundCall(ctx, call.CreateCallInput{
+	input := call.CreateCallInput{
 		TenantID:      req.TenantID,
 		Caller:        cli.Number,
 		Callee:        req.Callee,
 		AgentUserID:   &agentID,
 		PhoneNumberID: &cli.ID,
-		CarrierID:     &rule.SIPTrunkID,
-	})
+	}
+	if rule != nil {
+		input.SIPTrunkID = &rule.SIPTrunkID
+	}
+	c, err := s.callSvc.CreateOutboundCall(ctx, input)
 	if err != nil {
 		return nil, fmt.Errorf("create call: %w", err)
 	}

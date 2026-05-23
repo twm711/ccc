@@ -145,6 +145,30 @@ func (c *Client) TransferCall(ctx context.Context, uuid, dest string) error {
 	return err
 }
 
+// HoldCall puts a call on hold.
+func (c *Client) HoldCall(ctx context.Context, uuid string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_hold %s", uuid))
+	return err
+}
+
+// RetrieveCall takes a call off hold.
+func (c *Client) RetrieveCall(ctx context.Context, uuid string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_hold off %s", uuid))
+	return err
+}
+
+// SendDTMF sends DTMF digits to a call.
+func (c *Client) SendDTMF(ctx context.Context, uuid, digits string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_send_dtmf %s %s", uuid, digits))
+	return err
+}
+
+// Bridge bridges two call legs.
+func (c *Client) Bridge(ctx context.Context, uuid1, uuid2 string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_bridge %s %s", uuid1, uuid2))
+	return err
+}
+
 func (c *Client) Close() {
 	close(c.pool)
 }

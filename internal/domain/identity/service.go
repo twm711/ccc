@@ -322,3 +322,167 @@ func (s *SkillGroupService) RemoveMember(ctx context.Context, skillGroupID, agen
 func (s *SkillGroupService) GetMembers(ctx context.Context, skillGroupID int64) ([]*SkillGroupMember, error) {
 	return s.members.GetBySkillGroup(ctx, skillGroupID)
 }
+
+// --- AgentPresenceService ---
+
+type AgentPresenceService struct {
+	presence AgentPresenceRepository
+	logs     AgentPresenceLogRepository
+}
+
+func NewAgentPresenceService(pr AgentPresenceRepository, lr AgentPresenceLogRepository) *AgentPresenceService {
+	return &AgentPresenceService{presence: pr, logs: lr}
+}
+
+// validTransitions defines allowed state transitions.
+var validTransitions = map[AgentPresenceStatus][]AgentPresenceStatus{
+	PresenceOffline: {PresenceOnline},
+	PresenceOnline:  {PresenceIdle, PresenceOffline},
+	PresenceIdle:    {PresenceDialing, PresenceTalking, PresenceBreak, PresenceOffline},
+	PresenceDialing: {PresenceTalking, PresenceACW, PresenceIdle},
+	PresenceTalking: {PresenceACW, PresenceIdle, PresenceOffline},
+	PresenceACW:     {PresenceIdle, PresenceOffline},
+	PresenceBreak:   {PresenceIdle, PresenceOffline},
+}
+
+func isValidTransition(from, to AgentPresenceStatus) bool {
+	for _, allowed := range validTransitions[from] {
+		if allowed == to {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *AgentPresenceService) CheckIn(ctx context.Context, tenantID, agentID int64, workMode WorkMode) (*AgentPresence, error) {
+	now := time.Now()
+	p := &AgentPresence{
+		ID:           snowflake.NextID(),
+		TenantID:     tenantID,
+		AgentID:      agentID,
+		Status:       PresenceOnline,
+		SubState:     SubStateNone,
+		WorkMode:     workMode,
+		CheckedInAt:  &now,
+		LastStatusAt: now,
+		UpdatedAt:    now,
+	}
+	if err := s.presence.Upsert(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *AgentPresenceService) CheckOut(ctx context.Context, agentID int64) error {
+	p, err := s.presence.GetByAgentID(ctx, agentID)
+	if err != nil || p == nil {
+		return ErrPresenceNotFound
+	}
+	s.logTransition(ctx, p)
+	p.Status = PresenceOffline
+	p.SubState = SubStateNone
+	p.CurrentCallID = nil
+	p.UpdatedAt = time.Now()
+	p.LastStatusAt = p.UpdatedAt
+	return s.presence.Upsert(ctx, p)
+}
+
+func (s *AgentPresenceService) TransitionTo(ctx context.Context, agentID int64, newStatus AgentPresenceStatus) (*AgentPresence, error) {
+	p, err := s.presence.GetByAgentID(ctx, agentID)
+	if err != nil || p == nil {
+		return nil, ErrPresenceNotFound
+	}
+	if !isValidTransition(p.Status, newStatus) {
+		return nil, ErrInvalidStateTransition
+	}
+	s.logTransition(ctx, p)
+	p.Status = newStatus
+	if newStatus != PresenceTalking {
+		p.SubState = SubStateNone
+	}
+	if newStatus == PresenceIdle || newStatus == PresenceOffline {
+		p.CurrentCallID = nil
+		p.DispositionCode = ""
+		p.BreakReasonCode = ""
+	}
+	p.UpdatedAt = time.Now()
+	p.LastStatusAt = p.UpdatedAt
+	if err := s.presence.Upsert(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *AgentPresenceService) SetSubState(ctx context.Context, agentID int64, subState AgentSubState) (*AgentPresence, error) {
+	p, err := s.presence.GetByAgentID(ctx, agentID)
+	if err != nil || p == nil {
+		return nil, ErrPresenceNotFound
+	}
+	p.SubState = subState
+	p.UpdatedAt = time.Now()
+	if err := s.presence.Upsert(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *AgentPresenceService) SwitchWorkMode(ctx context.Context, agentID int64, mode WorkMode) (*AgentPresence, error) {
+	if mode != WorkModeOnSite && mode != WorkModeOffSite && mode != WorkModeOffice {
+		return nil, ErrInvalidWorkMode
+	}
+	p, err := s.presence.GetByAgentID(ctx, agentID)
+	if err != nil || p == nil {
+		return nil, ErrPresenceNotFound
+	}
+	p.WorkMode = mode
+	p.UpdatedAt = time.Now()
+	if err := s.presence.Upsert(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *AgentPresenceService) SetBreak(ctx context.Context, agentID int64, reasonCode string) (*AgentPresence, error) {
+	p, err := s.TransitionTo(ctx, agentID, PresenceBreak)
+	if err != nil {
+		return nil, err
+	}
+	p.BreakReasonCode = reasonCode
+	p.UpdatedAt = time.Now()
+	if err := s.presence.Upsert(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *AgentPresenceService) SetACW(ctx context.Context, agentID int64, dispositionCode string) (*AgentPresence, error) {
+	p, err := s.TransitionTo(ctx, agentID, PresenceACW)
+	if err != nil {
+		return nil, err
+	}
+	p.DispositionCode = dispositionCode
+	p.UpdatedAt = time.Now()
+	if err := s.presence.Upsert(ctx, p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}
+
+func (s *AgentPresenceService) GetPresence(ctx context.Context, agentID int64) (*AgentPresence, error) {
+	return s.presence.GetByAgentID(ctx, agentID)
+}
+
+func (s *AgentPresenceService) logTransition(ctx context.Context, p *AgentPresence) {
+	dur := int(time.Since(p.LastStatusAt).Seconds())
+	_ = s.logs.Create(ctx, &AgentPresenceLog{
+		ID:              snowflake.NextID(),
+		TenantID:        p.TenantID,
+		AgentID:         p.AgentID,
+		Status:          p.Status,
+		SubState:        p.SubState,
+		WorkMode:        p.WorkMode,
+		BreakReasonCode: p.BreakReasonCode,
+		DurationSec:     dur,
+		CreatedAt:       time.Now(),
+	})
+}

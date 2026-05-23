@@ -211,3 +211,115 @@ func TestCallService_ListCalls_Filter(t *testing.T) {
 	assert.Len(t, calls, 1)
 	assert.Equal(t, CallTypeInternal, calls[0].CallType)
 }
+
+// --- Phase 3 TDD Tests ---
+
+func newServiceWithCallback() (*CallService, *MockCallbackRepo) {
+	cbRepo := NewMockCallbackRepo()
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo(), cbRepo)
+	return svc, cbRepo
+}
+
+func createActiveCall(t *testing.T, svc *CallService) *Call {
+	t.Helper()
+	c, err := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+	require.NoError(t, err)
+	c.Status = CallStatusActive
+	_ = svc.calls.Update(context.Background(), c)
+	return c
+}
+
+func TestCallService_HoldCall(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	held, err := svc.HoldCall(context.Background(), c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, CallStatusHeld, held.Status)
+	assert.Equal(t, 1, held.HoldCount)
+}
+
+func TestCallService_RetrieveCall(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	_, _ = svc.HoldCall(context.Background(), c.ID)
+	retrieved, err := svc.RetrieveCall(context.Background(), c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, CallStatusActive, retrieved.Status)
+}
+
+func TestCallService_BlindTransfer_ToSkillGroup(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	sgID := int64(10)
+	transferred, err := svc.BlindTransfer(context.Background(), c.ID, TransferTarget{
+		Type: "skill_group", SkillGroupID: &sgID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, transferred.TransferCount)
+}
+
+func TestCallService_BlindTransfer_ToAgent(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	agentID := int64(20)
+	transferred, err := svc.BlindTransfer(context.Background(), c.ID, TransferTarget{
+		Type: "agent", AgentUserID: &agentID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, transferred.TransferCount)
+}
+
+func TestCallService_BlindTransfer_ToExternal(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	transferred, err := svc.BlindTransfer(context.Background(), c.ID, TransferTarget{
+		Type: "external", ExternalNum: "+8613800000000",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, transferred.TransferCount)
+}
+
+func TestCallService_SendDTMF(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	err := svc.SendDTMF(context.Background(), c.ID, "1234#")
+	assert.NoError(t, err)
+}
+
+func TestCallService_RequestCallback(t *testing.T) {
+	svc, _ := newServiceWithCallback()
+	ctx := context.Background()
+
+	cb := &CallbackRequest{
+		TenantID:     1,
+		CallID:       100,
+		SkillGroupID: 10,
+		Caller:       "+8613800138000",
+	}
+	err := svc.RequestCallback(ctx, cb)
+	require.NoError(t, err)
+	assert.Equal(t, "pending", cb.Status)
+	assert.NotZero(t, cb.ID)
+}
+
+func TestCallService_ExecuteCallback(t *testing.T) {
+	svc, _ := newServiceWithCallback()
+	ctx := context.Background()
+
+	cb := &CallbackRequest{TenantID: 1, CallID: 100, SkillGroupID: 10, Caller: "+86138"}
+	_ = svc.RequestCallback(ctx, cb)
+
+	completed, err := svc.ExecuteCallback(ctx, cb.ID, true)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", completed.Status)
+	assert.Equal(t, 1, completed.AttemptCount)
+	assert.NotNil(t, completed.CompletedAt)
+}

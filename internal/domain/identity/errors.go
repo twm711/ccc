@@ -15,4 +15,8 @@ var (
 	ErrMemberAlreadyExists    = errors.New("agent is already a member of this skill group")
 	ErrMaxAgentsReached       = errors.New("maximum number of agents reached for this tenant")
 	ErrInvalidRoutingPolicy   = errors.New("invalid routing policy")
+	ErrPresenceNotFound       = errors.New("agent presence not found")
+	ErrInvalidStateTransition = errors.New("invalid agent state transition")
+	ErrInvalidWorkMode        = errors.New("invalid work mode")
+	ErrAgentNotCheckedIn      = errors.New("agent is not checked in")
 )

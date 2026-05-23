@@ -269,3 +269,87 @@ func TestSkillGroupService_RemoveMember(t *testing.T) {
 	members, _ := svc.GetMembers(ctx, 1)
 	assert.Empty(t, members)
 }
+
+// --- AgentPresence Service Tests ---
+
+func newPresenceSvc() *AgentPresenceService {
+	return NewAgentPresenceService(NewMockAgentPresenceRepo(), NewMockAgentPresenceLogRepo())
+}
+
+func TestAgentPresence_StateTransition_DialingToTalking(t *testing.T) {
+	svc := newPresenceSvc()
+	ctx := context.Background()
+
+	p, err := svc.CheckIn(ctx, 1, 100, WorkModeOnSite)
+	require.NoError(t, err)
+	assert.Equal(t, PresenceOnline, p.Status)
+
+	// online → idle
+	p, err = svc.TransitionTo(ctx, 100, PresenceIdle)
+	require.NoError(t, err)
+	assert.Equal(t, PresenceIdle, p.Status)
+
+	// idle → dialing
+	p, err = svc.TransitionTo(ctx, 100, PresenceDialing)
+	require.NoError(t, err)
+	assert.Equal(t, PresenceDialing, p.Status)
+
+	// dialing → talking
+	p, err = svc.TransitionTo(ctx, 100, PresenceTalking)
+	require.NoError(t, err)
+	assert.Equal(t, PresenceTalking, p.Status)
+}
+
+func TestAgentPresence_SubState_Monitored(t *testing.T) {
+	svc := newPresenceSvc()
+	ctx := context.Background()
+
+	_, _ = svc.CheckIn(ctx, 1, 100, WorkModeOnSite)
+	_, _ = svc.TransitionTo(ctx, 100, PresenceIdle)
+	_, _ = svc.TransitionTo(ctx, 100, PresenceTalking)
+
+	p, err := svc.SetSubState(ctx, 100, SubStateMonitored)
+	require.NoError(t, err)
+	assert.Equal(t, SubStateMonitored, p.SubState)
+	assert.Equal(t, PresenceTalking, p.Status)
+}
+
+func TestAgentPresence_WorkMode_Switch(t *testing.T) {
+	svc := newPresenceSvc()
+	ctx := context.Background()
+
+	_, _ = svc.CheckIn(ctx, 1, 100, WorkModeOnSite)
+
+	p, err := svc.SwitchWorkMode(ctx, 100, WorkModeOffSite)
+	require.NoError(t, err)
+	assert.Equal(t, WorkModeOffSite, p.WorkMode)
+
+	// invalid work mode
+	_, err = svc.SwitchWorkMode(ctx, 100, "invalid")
+	assert.ErrorIs(t, err, ErrInvalidWorkMode)
+}
+
+func TestAgentPresence_ACW_WithDispositionCode(t *testing.T) {
+	svc := newPresenceSvc()
+	ctx := context.Background()
+
+	_, _ = svc.CheckIn(ctx, 1, 100, WorkModeOnSite)
+	_, _ = svc.TransitionTo(ctx, 100, PresenceIdle)
+	_, _ = svc.TransitionTo(ctx, 100, PresenceTalking)
+
+	p, err := svc.SetACW(ctx, 100, "resolved")
+	require.NoError(t, err)
+	assert.Equal(t, PresenceACW, p.Status)
+	assert.Equal(t, "resolved", p.DispositionCode)
+}
+
+func TestAgentPresence_InvalidTransition(t *testing.T) {
+	svc := newPresenceSvc()
+	ctx := context.Background()
+
+	_, _ = svc.CheckIn(ctx, 1, 100, WorkModeOnSite)
+
+	// online → talking (invalid, must go through idle first)
+	_, err := svc.TransitionTo(ctx, 100, PresenceTalking)
+	assert.ErrorIs(t, err, ErrInvalidStateTransition)
+}

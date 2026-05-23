@@ -135,3 +135,41 @@ const (
 	PresenceACW     AgentPresenceStatus = "acw"
 	PresenceDialing AgentPresenceStatus = "dialing"
 )
+
+type AgentSubState string
+
+const (
+	SubStateNone       AgentSubState = ""
+	SubStateMonitored  AgentSubState = "monitored"
+	SubStateConsulted  AgentSubState = "consulted"
+	SubStateConsulting AgentSubState = "consulting"
+	SubStateConference AgentSubState = "conference"
+	SubStateMonitoring AgentSubState = "monitoring"
+)
+
+type AgentPresence struct {
+	ID              int64               `db:"id" json:"id"`
+	TenantID        int64               `db:"tenant_id" json:"tenant_id"`
+	AgentID         int64               `db:"agent_id" json:"agent_id"`
+	Status          AgentPresenceStatus `db:"status" json:"status"`
+	SubState        AgentSubState       `db:"sub_state" json:"sub_state"`
+	WorkMode        WorkMode            `db:"work_mode" json:"work_mode"`
+	BreakReasonCode string              `db:"break_reason_code" json:"break_reason_code,omitempty"`
+	DispositionCode string              `db:"disposition_code" json:"disposition_code,omitempty"`
+	CurrentCallID   *int64              `db:"current_call_id" json:"current_call_id,omitempty"`
+	CheckedInAt     *time.Time          `db:"checked_in_at" json:"checked_in_at,omitempty"`
+	LastStatusAt    time.Time           `db:"last_status_at" json:"last_status_at"`
+	UpdatedAt       time.Time           `db:"updated_at" json:"updated_at"`
+}
+
+type AgentPresenceLog struct {
+	ID              int64               `db:"id" json:"id"`
+	TenantID        int64               `db:"tenant_id" json:"tenant_id"`
+	AgentID         int64               `db:"agent_id" json:"agent_id"`
+	Status          AgentPresenceStatus `db:"status" json:"status"`
+	SubState        AgentSubState       `db:"sub_state" json:"sub_state"`
+	WorkMode        WorkMode            `db:"work_mode" json:"work_mode"`
+	BreakReasonCode string              `db:"break_reason_code" json:"break_reason_code,omitempty"`
+	DurationSec     int                 `db:"duration_sec" json:"duration_sec"`
+	CreatedAt       time.Time           `db:"created_at" json:"created_at"`
+}

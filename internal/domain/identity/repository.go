@@ -47,3 +47,14 @@ type SkillGroupMemberRepository interface {
 	GetByAgent(ctx context.Context, agentID int64) ([]*SkillGroupMember, error)
 	Exists(ctx context.Context, skillGroupID, agentID int64) (bool, error)
 }
+
+type AgentPresenceRepository interface {
+	Upsert(ctx context.Context, p *AgentPresence) error
+	GetByAgentID(ctx context.Context, agentID int64) (*AgentPresence, error)
+	ListByTenant(ctx context.Context, tenantID int64) ([]*AgentPresence, error)
+}
+
+type AgentPresenceLogRepository interface {
+	Create(ctx context.Context, l *AgentPresenceLog) error
+	ListByAgent(ctx context.Context, agentID int64, offset, limit int) ([]*AgentPresenceLog, int64, error)
+}

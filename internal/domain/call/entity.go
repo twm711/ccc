@@ -85,6 +85,7 @@ type Call struct {
 	IVRFlowID           *int64          `db:"ivr_flow_id" json:"ivr_flow_id,omitempty"`
 	PhoneNumberID       *int64          `db:"phone_number_id" json:"phone_number_id,omitempty"`
 	CarrierID           *int64          `db:"carrier_id" json:"carrier_id,omitempty"`
+	SIPTrunkID          *int64          `db:"sip_trunk_id" json:"sip_trunk_id,omitempty"`
 	ParentCallID        *int64          `db:"parent_call_id" json:"parent_call_id,omitempty"`
 	CampaignCaseID      *int64          `db:"campaign_case_id" json:"campaign_case_id,omitempty"`
 	Status              CallStatus      `db:"status" json:"status"`

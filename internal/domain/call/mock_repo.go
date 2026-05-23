@@ -123,3 +123,44 @@ func (r *MockIVRTrackingRepo) ListByCallID(_ context.Context, callID int64) ([]*
 	}
 	return result, nil
 }
+
+type MockCallbackRepo struct {
+	mu   sync.RWMutex
+	data map[int64]*CallbackRequest
+}
+
+func NewMockCallbackRepo() *MockCallbackRepo {
+	return &MockCallbackRepo{data: make(map[int64]*CallbackRequest)}
+}
+
+func (r *MockCallbackRepo) Create(_ context.Context, cb *CallbackRequest) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[cb.ID] = cb
+	return nil
+}
+
+func (r *MockCallbackRepo) GetByID(_ context.Context, id int64) (*CallbackRequest, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.data[id], nil
+}
+
+func (r *MockCallbackRepo) Update(_ context.Context, cb *CallbackRequest) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.data[cb.ID] = cb
+	return nil
+}
+
+func (r *MockCallbackRepo) ListPending(_ context.Context, tenantID int64) ([]*CallbackRequest, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var result []*CallbackRequest
+	for _, cb := range r.data {
+		if cb.TenantID == tenantID && cb.Status == "pending" {
+			result = append(result, cb)
+		}
+	}
+	return result, nil
+}

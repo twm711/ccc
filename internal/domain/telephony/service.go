@@ -162,10 +162,17 @@ func parseNumberPool(ids string) []int64 {
 			continue
 		}
 		var id int64
+		valid := true
 		for _, c := range p {
+			if c < '0' || c > '9' {
+				valid = false
+				break
+			}
 			id = id*10 + int64(c-'0')
 		}
-		result = append(result, id)
+		if valid {
+			result = append(result, id)
+		}
 	}
 	return result
 }
