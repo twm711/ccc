@@ -40,8 +40,10 @@ const (
 	CallStatusQueue     CallStatus = "queue"
 	CallStatusRinging   CallStatus = "ringing"
 	CallStatusActive    CallStatus = "active"
-	CallStatusHeld      CallStatus = "held"
-	CallStatusCompleted CallStatus = "completed"
+	CallStatusHeld       CallStatus = "held"
+	CallStatusConsulting CallStatus = "consulting"
+	CallStatusConference CallStatus = "conference"
+	CallStatusCompleted  CallStatus = "completed"
 	CallStatusAbandoned CallStatus = "abandoned"
 	CallStatusFailed    CallStatus = "failed"
 )

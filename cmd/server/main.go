@@ -140,6 +140,7 @@ func main() {
 	dashboardHandler := handler.NewDashboardHandler(dashboardSvc)
 	reportHandler := handler.NewReportHandler(reportSvc)
 	csatHandler := handler.NewCSATHandler(csatSvc, csatConfigRepo, csatResultRepo)
+	profileHandler := handler.NewProfileHandler(userSvc)
 
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
@@ -168,6 +169,7 @@ func main() {
 		DashboardHandler:     dashboardHandler,
 		ReportHandler:        reportHandler,
 		CSATHandler:          csatHandler,
+		ProfileHandler:       profileHandler,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,

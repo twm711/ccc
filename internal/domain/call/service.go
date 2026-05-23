@@ -2,6 +2,7 @@ package call
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/divord97/ccc/pkg/snowflake"
@@ -342,6 +343,221 @@ func (s *CallService) ExecuteCallback(ctx context.Context, id int64, success boo
 		return nil, err
 	}
 	return cb, nil
+}
+
+// --- Phase 5: Advanced Call Control ---
+
+// AttendedTransfer performs a warm transfer (agent stays until target answers).
+func (s *CallService) AttendedTransfer(ctx context.Context, id int64, target TransferTarget) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusActive && c.Status != CallStatusHeld {
+		return nil, ErrCallNotActive
+	}
+	if target.Type == "" {
+		return nil, ErrMissingTransferTarget
+	}
+
+	c.TransferCount++
+	detail := "attended:" + target.Type
+	if target.ExternalNum != "" {
+		detail += ":" + target.ExternalNum
+	}
+
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "attended_transfer", Detail: detail, CreatedAt: time.Now(),
+	})
+	return c, nil
+}
+
+// InitiateConsult starts a consultation call (original call held, agent talks to target).
+func (s *CallService) InitiateConsult(ctx context.Context, id int64, target TransferTarget) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusActive {
+		return nil, ErrCallNotActive
+	}
+	if target.Type == "" {
+		return nil, ErrMissingTransferTarget
+	}
+
+	c.Status = CallStatusConsulting
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "consult_initiated", Detail: target.Type, CreatedAt: time.Now(),
+	})
+	return c, nil
+}
+
+// CompleteConsultTransfer completes the consult and transfers the call.
+func (s *CallService) CompleteConsultTransfer(ctx context.Context, id int64) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusConsulting {
+		return nil, ErrCallNotConsulting
+	}
+
+	c.TransferCount++
+	c.Status = CallStatusActive
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "consult_transfer_completed", CreatedAt: time.Now(),
+	})
+	return c, nil
+}
+
+// CancelConsult cancels a consultation and returns to original call.
+func (s *CallService) CancelConsult(ctx context.Context, id int64) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusConsulting {
+		return nil, ErrCallNotConsulting
+	}
+
+	c.Status = CallStatusActive
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "consult_cancelled", CreatedAt: time.Now(),
+	})
+	return c, nil
+}
+
+// StartConference converts an active call into a conference (three-way).
+func (s *CallService) StartConference(ctx context.Context, id int64) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusActive && c.Status != CallStatusConsulting {
+		return nil, ErrCallNotActive
+	}
+
+	c.Status = CallStatusConference
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "conference_started", CreatedAt: time.Now(),
+	})
+	return c, nil
+}
+
+// MonitorCall creates a monitor/whisper/barge/intercept session on an active call.
+func (s *CallService) MonitorCall(ctx context.Context, tenantID, targetCallID, supervisorID int64, mode string) (*Call, error) {
+	target, err := s.calls.GetByID(ctx, targetCallID)
+	if err != nil || target == nil {
+		return nil, ErrCallNotFound
+	}
+	if target.Status != CallStatusActive && target.Status != CallStatusConference {
+		return nil, ErrMonitorTargetNotActive
+	}
+
+	var ct CallType
+	switch mode {
+	case "listen":
+		ct = CallTypeMonitor
+	case "whisper":
+		ct = CallTypeWhisper
+	case "barge":
+		ct = CallTypeBarge
+	case "intercept":
+		ct = CallTypeIntercept
+	default:
+		return nil, ErrMissingMonitorTarget
+	}
+
+	now := time.Now()
+	monitor := &Call{
+		ID:           snowflake.NextID(),
+		TenantID:     tenantID,
+		Direction:    DirectionOutbound,
+		CallType:     ct,
+		MediaType:    MediaTypeAudio,
+		AgentUserID:  &supervisorID,
+		ParentCallID: &targetCallID,
+		Status:       CallStatusActive,
+		StartedAt:    now,
+	}
+	if err := s.calls.Create(ctx, monitor); err != nil {
+		return nil, err
+	}
+
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: monitor.ID, TenantID: tenantID,
+		Event: "monitor_started", Detail: mode, CreatedAt: now,
+	})
+	return monitor, nil
+}
+
+// CoachCall creates a coaching session (supervisor talks to agent, customer cannot hear).
+func (s *CallService) CoachCall(ctx context.Context, tenantID, targetCallID, coachID int64, timeoutSec int) (*Call, error) {
+	target, err := s.calls.GetByID(ctx, targetCallID)
+	if err != nil || target == nil {
+		return nil, ErrCallNotFound
+	}
+	if target.Status != CallStatusActive {
+		return nil, ErrMonitorTargetNotActive
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 30
+	}
+
+	now := time.Now()
+	coach := &Call{
+		ID:           snowflake.NextID(),
+		TenantID:     tenantID,
+		Direction:    DirectionOutbound,
+		CallType:     CallTypeCoach,
+		MediaType:    MediaTypeAudio,
+		AgentUserID:  &coachID,
+		ParentCallID: &targetCallID,
+		Status:       CallStatusActive,
+		StartedAt:    now,
+	}
+	if err := s.calls.Create(ctx, coach); err != nil {
+		return nil, err
+	}
+
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: coach.ID, TenantID: tenantID,
+		Event: "coach_started", Detail: fmt.Sprintf("timeout=%ds", timeoutSec), CreatedAt: now,
+	})
+	return coach, nil
+}
+
+// WhisperPreConnect plays a whisper announcement to the agent before connecting a call.
+func (s *CallService) WhisperPreConnect(ctx context.Context, callID int64, message string) error {
+	c, err := s.calls.GetByID(ctx, callID)
+	if err != nil || c == nil {
+		return ErrCallNotFound
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "whisper_pre_connect", Detail: message, CreatedAt: time.Now(),
+	})
+	return nil
 }
 
 // CalculateDurations computes IVR/ring/queue/wait durations from call events.
