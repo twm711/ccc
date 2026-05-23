@@ -323,3 +323,150 @@ func TestCallService_ExecuteCallback(t *testing.T) {
 	assert.Equal(t, 1, completed.AttemptCount)
 	assert.NotNil(t, completed.CompletedAt)
 }
+
+// --- Phase 5 TDD Tests ---
+
+func TestCallService_AttendedTransfer(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	agentID := int64(20)
+	transferred, err := svc.AttendedTransfer(context.Background(), c.ID, TransferTarget{
+		Type: "agent", AgentUserID: &agentID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, 1, transferred.TransferCount)
+}
+
+func TestCallService_AttendedTransfer_NotActive(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c, _ := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+
+	_, err := svc.AttendedTransfer(context.Background(), c.ID, TransferTarget{Type: "agent"})
+	assert.ErrorIs(t, err, ErrCallNotActive)
+}
+
+func TestCallService_ConsultTransfer_Initiate(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	agentID := int64(30)
+	consulted, err := svc.InitiateConsult(context.Background(), c.ID, TransferTarget{
+		Type: "agent", AgentUserID: &agentID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, CallStatusConsulting, consulted.Status)
+}
+
+func TestCallService_ConsultTransfer_Complete(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	agentID := int64(30)
+	_, _ = svc.InitiateConsult(context.Background(), c.ID, TransferTarget{
+		Type: "agent", AgentUserID: &agentID,
+	})
+
+	completed, err := svc.CompleteConsultTransfer(context.Background(), c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, completed.TransferCount)
+}
+
+func TestCallService_ConsultTransfer_Cancel(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	agentID := int64(30)
+	_, _ = svc.InitiateConsult(context.Background(), c.ID, TransferTarget{
+		Type: "agent", AgentUserID: &agentID,
+	})
+
+	cancelled, err := svc.CancelConsult(context.Background(), c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, CallStatusActive, cancelled.Status)
+}
+
+func TestCallService_Conference_ThreeWay(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	conf, err := svc.StartConference(context.Background(), c.ID)
+	require.NoError(t, err)
+	assert.Equal(t, CallStatusConference, conf.Status)
+}
+
+func TestCallService_Monitor_Listen(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	target := createActiveCall(t, svc)
+
+	monitor, err := svc.MonitorCall(context.Background(), target.TenantID, target.ID, int64(100), "listen")
+	require.NoError(t, err)
+	assert.Equal(t, CallTypeMonitor, monitor.CallType)
+}
+
+func TestCallService_Monitor_Whisper(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	target := createActiveCall(t, svc)
+
+	monitor, err := svc.MonitorCall(context.Background(), target.TenantID, target.ID, int64(100), "whisper")
+	require.NoError(t, err)
+	assert.Equal(t, CallTypeWhisper, monitor.CallType)
+}
+
+func TestCallService_Monitor_Barge(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	target := createActiveCall(t, svc)
+
+	monitor, err := svc.MonitorCall(context.Background(), target.TenantID, target.ID, int64(100), "barge")
+	require.NoError(t, err)
+	assert.Equal(t, CallTypeBarge, monitor.CallType)
+}
+
+func TestCallService_Monitor_Intercept(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	target := createActiveCall(t, svc)
+
+	monitor, err := svc.MonitorCall(context.Background(), target.TenantID, target.ID, int64(100), "intercept")
+	require.NoError(t, err)
+	assert.Equal(t, CallTypeIntercept, monitor.CallType)
+}
+
+func TestCallService_Monitor_TargetNotActive(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c, _ := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+
+	_, err := svc.MonitorCall(context.Background(), c.TenantID, c.ID, int64(100), "listen")
+	assert.ErrorIs(t, err, ErrMonitorTargetNotActive)
+}
+
+func TestCallService_Coach_Success(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	target := createActiveCall(t, svc)
+
+	coach, err := svc.CoachCall(context.Background(), target.TenantID, target.ID, int64(200), 30)
+	require.NoError(t, err)
+	assert.Equal(t, CallTypeCoach, coach.CallType)
+	assert.Equal(t, &target.ID, coach.ParentCallID)
+}
+
+func TestCallService_Coach_TargetNotActive(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c, _ := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID: 1, Caller: "a", Callee: "b",
+	})
+
+	_, err := svc.CoachCall(context.Background(), c.TenantID, c.ID, int64(200), 30)
+	assert.ErrorIs(t, err, ErrMonitorTargetNotActive)
+}
+
+func TestCallService_Whisper_PreConnect(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c := createActiveCall(t, svc)
+
+	err := svc.WhisperPreConnect(context.Background(), c.ID, "来电: VIP客户 张三")
+	require.NoError(t, err)
+}

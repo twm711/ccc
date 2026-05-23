@@ -47,6 +47,9 @@ type RouterDeps struct {
 	ReportHandler    *handler.ReportHandler
 	CSATHandler      *handler.CSATHandler
 
+	// Phase 5
+	ProfileHandler *handler.ProfileHandler
+
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
 	AuditLogRepo platform.AuditLogRepository
@@ -271,6 +274,27 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		})
 
 		r.Get("/csat-results", deps.CSATHandler.ListResults)
+
+		// --- Phase 5 Routes ---
+
+		// Advanced call control (added to existing /calls route)
+		r.Post("/calls/{id}/attended-transfer", deps.CallControlHandler.AttendedTransfer)
+		r.Post("/calls/{id}/consult", deps.CallControlHandler.Consult)
+		r.Post("/calls/{id}/consult-transfer", deps.CallControlHandler.ConsultTransfer)
+		r.Post("/calls/{id}/consult-cancel", deps.CallControlHandler.ConsultCancel)
+		r.Post("/calls/{id}/conference", deps.CallControlHandler.Conference)
+		r.Post("/calls/{id}/monitor", deps.CallControlHandler.Monitor)
+		r.Post("/calls/{id}/whisper", deps.CallControlHandler.Whisper)
+		r.Post("/calls/{id}/barge", deps.CallControlHandler.Barge)
+		r.Post("/calls/{id}/intercept", deps.CallControlHandler.InterceptCall)
+		r.Post("/calls/{id}/coach", deps.CallControlHandler.Coach)
+
+		r.Route("/me", func(r chi.Router) {
+			r.Get("/overview", deps.ProfileHandler.Overview)
+			r.Put("/profile", deps.ProfileHandler.UpdateProfile)
+			r.Put("/password", deps.ProfileHandler.ChangePassword)
+			r.Post("/reset-state", deps.ProfileHandler.ResetState)
+		})
 	})
 
 	return r

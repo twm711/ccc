@@ -169,6 +169,72 @@ func (c *Client) Bridge(ctx context.Context, uuid1, uuid2 string) error {
 	return err
 }
 
+// Conference adds a call leg to a conference room via mod_conference.
+func (c *Client) Conference(ctx context.Context, uuid, confName string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_transfer %s conference:%s@default inline", uuid, confName))
+	return err
+}
+
+// Eavesdrop starts monitoring a call (listen-only mode).
+func (c *Client) Eavesdrop(ctx context.Context, spyUUID, targetUUID string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_transfer %s eavesdrop:%s inline", spyUUID, targetUUID))
+	return err
+}
+
+// EavesdropWhisper monitors with whisper (spy can talk to agent only).
+func (c *Client) EavesdropWhisper(ctx context.Context, spyUUID, targetUUID string) error {
+	cmd := fmt.Sprintf("uuid_setvar %s eavesdrop_whisper_bleg true", spyUUID)
+	if _, err := c.SendCommand(ctx, cmd); err != nil {
+		return err
+	}
+	return c.Eavesdrop(ctx, spyUUID, targetUUID)
+}
+
+// EavesdropBarge monitors with barge (spy can talk to both parties).
+func (c *Client) EavesdropBarge(ctx context.Context, spyUUID, targetUUID string) error {
+	cmd := fmt.Sprintf("uuid_setvar %s eavesdrop_enable_dtmf true", spyUUID)
+	if _, err := c.SendCommand(ctx, cmd); err != nil {
+		return err
+	}
+	return c.Eavesdrop(ctx, spyUUID, targetUUID)
+}
+
+// Intercept takes over a call from another agent.
+func (c *Client) Intercept(ctx context.Context, interceptorUUID, targetUUID string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_transfer %s intercept:%s inline", interceptorUUID, targetUUID))
+	return err
+}
+
+// Coach starts a coaching session (coach audio to agent only, customer cannot hear).
+func (c *Client) Coach(ctx context.Context, coachUUID, targetUUID string) error {
+	cmd := fmt.Sprintf("uuid_setvar %s eavesdrop_whisper_aleg true", coachUUID)
+	if _, err := c.SendCommand(ctx, cmd); err != nil {
+		return err
+	}
+	return c.Eavesdrop(ctx, coachUUID, targetUUID)
+}
+
+// WhisperAnnouncement plays a whisper announcement to the agent before connecting.
+func (c *Client) WhisperAnnouncement(ctx context.Context, uuid, audioFile string) error {
+	_, err := c.SendCommand(ctx, fmt.Sprintf("uuid_broadcast %s %s aleg", uuid, audioFile))
+	return err
+}
+
+// RegisterSIPPhone registers a SIP phone via mod_sofia (configuration).
+func (c *Client) RegisterSIPPhone(ctx context.Context, extension, password, domain string) error {
+	cmd := fmt.Sprintf("sofia profile internal register sip:%s@%s", extension, domain)
+	_, err := c.SendCommand(ctx, cmd)
+	return err
+}
+
+// OriginateToPhone bridges a call to an external phone number (field mode).
+func (c *Client) OriginateToPhone(ctx context.Context, uuid, phoneNumber, callerID, gateway string) error {
+	dest := fmt.Sprintf("sofia/gateway/%s/%s", gateway, phoneNumber)
+	cmd := fmt.Sprintf("uuid_transfer %s bridge:{origination_caller_id_number=%s}%s inline", uuid, callerID, dest)
+	_, err := c.SendCommand(ctx, cmd)
+	return err
+}
+
 func (c *Client) Close() {
 	close(c.pool)
 }

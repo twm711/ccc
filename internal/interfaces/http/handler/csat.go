@@ -64,11 +64,20 @@ func (h *CSATHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(existing); err != nil {
+	var in struct {
+		TriggerType string `json:"trigger_type"`
+		ScaleMin    int    `json:"scale_min"`
+		ScaleMax    int    `json:"scale_max"`
+		IsActive    bool   `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	existing.ID = id
+	existing.TriggerType = in.TriggerType
+	existing.ScaleMin = in.ScaleMin
+	existing.ScaleMax = in.ScaleMax
+	existing.IsActive = in.IsActive
 	existing.UpdatedAt = time.Now()
 
 	if err := h.configs.Update(r.Context(), existing); err != nil {

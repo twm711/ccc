@@ -2,6 +2,8 @@ package csat
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/integration"
@@ -24,8 +26,11 @@ func NewService(configs integration.CSATConfigRepository, results integration.CS
 func (s *Service) TriggerSurvey(ctx context.Context, tenantID, callID int64, agentID *int64) error {
 	cfg, err := s.configs.GetActive(ctx, tenantID)
 	if err != nil {
-		s.logger.Debug().Int64("tenant_id", tenantID).Msg("csat: no active config, skip survey")
-		return nil
+		if errors.Is(err, sql.ErrNoRows) {
+			s.logger.Debug().Int64("tenant_id", tenantID).Msg("csat: no active config, skip survey")
+			return nil
+		}
+		return err
 	}
 
 	switch cfg.TriggerType {
