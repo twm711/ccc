@@ -5,11 +5,13 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/divord97/ccc/internal/application/csat"
 	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/internal/domain/identity"
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/domain/report"
 	"github.com/divord97/ccc/internal/domain/routing"
 	"github.com/divord97/ccc/internal/domain/telephony"
 	infraMySQL "github.com/divord97/ccc/internal/infrastructure/mysql"
@@ -76,6 +78,17 @@ func main() {
 	quickReplyRepo := infraMySQL.NewQuickReplyRepo(db)
 	smsConfigRepo := infraMySQL.NewSmsConfigRepo(db)
 
+	// --- Phase 4 Repositories ---
+	agentReportRepo := infraMySQL.NewAgentReportRepo(db)
+	groupAgentReportRepo := infraMySQL.NewGroupAgentReportRepo(db)
+	skillGroupReportRepo := infraMySQL.NewSkillGroupReportRepo(db)
+	b2bReportRepo := infraMySQL.NewBack2BackReportRepo(db)
+	internalCallReportRepo := infraMySQL.NewInternalCallReportRepo(db)
+	agentStatusLogRepo := infraMySQL.NewAgentStatusLogRepo(db)
+	csatConfigRepo := infraMySQL.NewCSATConfigRepo(db)
+	csatResultRepo := infraMySQL.NewCSATResultRepo(db)
+	dashboardRepo := infraRedis.NewDashboardRepo(redisClient)
+
 	// --- Domain Services ---
 	tenantSvc := identity.NewTenantService(tenantRepo, tenantSettingsRepo)
 	userSvc := identity.NewUserService(userRepo, agentRepo)
@@ -89,8 +102,13 @@ func main() {
 	dncSvc := integration.NewDNCService(dncRepo)
 	callTagSvc := integration.NewCallTagService(callTagRepo)
 
+	// --- Phase 4 Domain Services ---
+	dashboardSvc := report.NewDashboardService(dashboardRepo)
+	reportSvc := report.NewReportService(agentReportRepo, groupAgentReportRepo, skillGroupReportRepo, b2bReportRepo, internalCallReportRepo, agentStatusLogRepo)
+
 	// --- Application Services ---
 	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, nil)
+	csatSvc := csat.NewService(csatConfigRepo, csatResultRepo, logger)
 	_ = callbackRepo // used via callSvc
 
 	// --- Infrastructure ---
@@ -119,6 +137,9 @@ func main() {
 	screenPopConfigHandler := handler.NewScreenPopConfigHandler(screenPopConfigRepo)
 	quickReplyHandler := handler.NewQuickReplyHandler(quickReplyRepo)
 	smsConfigHandler := handler.NewSmsConfigHandler(smsConfigRepo)
+	dashboardHandler := handler.NewDashboardHandler(dashboardSvc)
+	reportHandler := handler.NewReportHandler(reportSvc)
+	csatHandler := handler.NewCSATHandler(csatSvc, csatConfigRepo, csatResultRepo)
 
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
@@ -144,6 +165,9 @@ func main() {
 		ScreenPopConfigHandler: screenPopConfigHandler,
 		QuickReplyHandler:     quickReplyHandler,
 		SmsConfigHandler:      smsConfigHandler,
+		DashboardHandler:     dashboardHandler,
+		ReportHandler:        reportHandler,
+		CSATHandler:          csatHandler,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,

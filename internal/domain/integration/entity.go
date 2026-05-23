@@ -81,6 +81,32 @@ type QuickReply struct {
 	UpdatedAt    time.Time       `db:"updated_at" json:"updated_at"`
 }
 
+type CSATConfig struct {
+	ID             int64     `db:"id" json:"id"`
+	TenantID       int64     `db:"tenant_id" json:"tenant_id"`
+	Name           string    `db:"name" json:"name"`
+	TriggerType    string    `db:"trigger_type" json:"trigger_type"` // ivr, sms, both
+	IVRFlowID      *int64    `db:"ivr_flow_id" json:"ivr_flow_id,omitempty"`
+	SmsTemplateID  string    `db:"sms_template_id" json:"sms_template_id,omitempty"`
+	ScaleMin       int       `db:"scale_min" json:"scale_min"`
+	ScaleMax       int       `db:"scale_max" json:"scale_max"`
+	IsActive       bool      `db:"is_active" json:"is_active"`
+	CreatedAt      time.Time `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time `db:"updated_at" json:"updated_at"`
+}
+
+type CSATResult struct {
+	ID        int64     `db:"id" json:"id"`
+	TenantID  int64     `db:"tenant_id" json:"tenant_id"`
+	CallID    int64     `db:"call_id" json:"call_id"`
+	ConfigID  int64     `db:"config_id" json:"config_id"`
+	AgentID   *int64    `db:"agent_id" json:"agent_id,omitempty"`
+	Rating    int       `db:"rating" json:"rating"`
+	Comment   string    `db:"comment" json:"comment,omitempty"`
+	Channel   string    `db:"channel" json:"channel"` // ivr, sms
+	CreatedAt time.Time `db:"created_at" json:"created_at"`
+}
+
 type SmsConfig struct {
 	ID          int64     `db:"id" json:"id"`
 	TenantID    int64     `db:"tenant_id" json:"tenant_id"`

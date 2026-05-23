@@ -42,6 +42,11 @@ type RouterDeps struct {
 	QuickReplyHandler     *handler.QuickReplyHandler
 	SmsConfigHandler      *handler.SmsConfigHandler
 
+	// Phase 4
+	DashboardHandler *handler.DashboardHandler
+	ReportHandler    *handler.ReportHandler
+	CSATHandler      *handler.CSATHandler
+
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
 	AuditLogRepo platform.AuditLogRepository
@@ -235,6 +240,37 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Put("/{id}", deps.SmsConfigHandler.Update)
 			r.Delete("/{id}", deps.SmsConfigHandler.Delete)
 		})
+
+		// --- Phase 4 Routes ---
+
+		r.Route("/dashboard", func(r chi.Router) {
+			r.Get("/overview", deps.DashboardHandler.Overview)
+			r.Get("/agent-status", deps.DashboardHandler.AgentStatus)
+			r.Get("/skill-group-status", deps.DashboardHandler.SkillGroupStatus)
+			r.Get("/call-trend", deps.DashboardHandler.CallTrend)
+			r.Get("/call-funnel", deps.DashboardHandler.CallFunnel)
+		})
+
+		r.Route("/reports", func(r chi.Router) {
+			r.Get("/agent", deps.ReportHandler.AgentReport)
+			r.Get("/agent/export", deps.ReportHandler.AgentReportExport)
+			r.Get("/group-agent", deps.ReportHandler.GroupAgentReport)
+			r.Get("/group-agent/export", deps.ReportHandler.GroupAgentReportExport)
+			r.Get("/skill-group", deps.ReportHandler.SkillGroupReport)
+			r.Get("/skill-group/export", deps.ReportHandler.SkillGroupReportExport)
+			r.Get("/back2back", deps.ReportHandler.Back2BackReport)
+			r.Get("/internal-call", deps.ReportHandler.InternalCallReport)
+			r.Get("/agent-status-log", deps.ReportHandler.AgentStatusLog)
+			r.Get("/agent-status-log/export", deps.ReportHandler.AgentStatusLogExport)
+		})
+
+		r.Route("/csat-configs", func(r chi.Router) {
+			r.Post("/", deps.CSATHandler.CreateConfig)
+			r.Get("/", deps.CSATHandler.ListConfigs)
+			r.Put("/{id}", deps.CSATHandler.UpdateConfig)
+		})
+
+		r.Get("/csat-results", deps.CSATHandler.ListResults)
 	})
 
 	return r

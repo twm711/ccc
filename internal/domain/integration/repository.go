@@ -47,6 +47,19 @@ type QuickReplyRepository interface {
 	ListAvailable(ctx context.Context, tenantID int64, agentID, skillGroupID *int64) ([]*QuickReply, error)
 }
 
+type CSATConfigRepository interface {
+	Create(ctx context.Context, c *CSATConfig) error
+	GetByID(ctx context.Context, id int64) (*CSATConfig, error)
+	Update(ctx context.Context, c *CSATConfig) error
+	List(ctx context.Context, tenantID int64, offset, limit int) ([]*CSATConfig, int64, error)
+	GetActive(ctx context.Context, tenantID int64) (*CSATConfig, error)
+}
+
+type CSATResultRepository interface {
+	Create(ctx context.Context, r *CSATResult) error
+	List(ctx context.Context, tenantID int64, offset, limit int) ([]*CSATResult, int64, error)
+}
+
 type SmsConfigRepository interface {
 	Create(ctx context.Context, s *SmsConfig) error
 	GetByID(ctx context.Context, id int64) (*SmsConfig, error)
