@@ -8,6 +8,8 @@ import (
 	"github.com/divord97/ccc/internal/application/b2b"
 	"github.com/divord97/ccc/internal/application/csat"
 	"github.com/divord97/ccc/internal/application/dialer"
+	"github.com/divord97/ccc/internal/application/email"
+	"github.com/divord97/ccc/internal/application/imassist"
 	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/ai"
@@ -15,11 +17,13 @@ import (
 	"github.com/divord97/ccc/internal/domain/campaign"
 	"github.com/divord97/ccc/internal/domain/crm"
 	"github.com/divord97/ccc/internal/domain/identity"
+	"github.com/divord97/ccc/internal/domain/im"
 	"github.com/divord97/ccc/internal/domain/integration"
 	"github.com/divord97/ccc/internal/domain/report"
 	"github.com/divord97/ccc/internal/domain/routing"
 	"github.com/divord97/ccc/internal/domain/telephony"
 	"github.com/divord97/ccc/internal/domain/ticket"
+	"github.com/divord97/ccc/internal/infrastructure/llm"
 	infraMySQL "github.com/divord97/ccc/internal/infrastructure/mysql"
 	infraRedis "github.com/divord97/ccc/internal/infrastructure/redis"
 	httpRouter "github.com/divord97/ccc/internal/interfaces/http"
@@ -144,12 +148,23 @@ func main() {
 	agentScriptSvc := ai.NewAgentScriptService(agentScriptRepo)
 	sessionInfoSvc := ai.NewSessionInfoTemplateService(sessionInfoTemplateRepo)
 
+	// --- Phase 8 Repositories ---
+	imChannelRepo := infraMySQL.NewIMChannelRepo(db)
+	imSessionRepo := infraMySQL.NewIMSessionRepo(db)
+	imMessageRepo := infraMySQL.NewIMMessageRepo(db)
+
+	// --- Phase 8 Domain Services ---
+	imSvc := im.NewIMService(imChannelRepo, imSessionRepo, imMessageRepo, 5)
+
 	// --- Application Services ---
 	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, nil)
 	csatSvc := csat.NewService(csatConfigRepo, csatResultRepo, logger)
 	dialerSvc := dialer.NewService(campaignSvc, nil, logger)
 	b2bSvc := b2b.NewService(callRepo, callEventRepo, nil, logger)
 	_ = callbackRepo // used via callSvc
+	emailSvc := email.NewService(imSvc, logger)
+	llmProvider := llm.NewStubProvider()
+	imAssistSvc := imassist.NewService(llmProvider, logger)
 
 	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
@@ -189,6 +204,11 @@ func main() {
 	knowledgeHandler := handler.NewKnowledgeHandler(knowledgeSvc)
 	agentScriptHandler := handler.NewAgentScriptHandler(agentScriptSvc)
 	sessionInfoHandler := handler.NewSessionInfoHandler(sessionInfoSvc)
+	imChannelHandler := handler.NewIMChannelHandler(imSvc)
+	imSessionHandler := handler.NewIMSessionHandler(imSvc)
+	widgetHandler := handler.NewWidgetHandler(imSvc)
+	emailInboundHandler := handler.NewEmailInboundHandler(emailSvc)
+	imAssistHandler := handler.NewIMAssistHandler(imAssistSvc)
 
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
@@ -226,6 +246,11 @@ func main() {
 		KnowledgeHandler:     knowledgeHandler,
 		AgentScriptHandler:   agentScriptHandler,
 		SessionInfoHandler:   sessionInfoHandler,
+		IMChannelHandler:     imChannelHandler,
+		IMSessionHandler:     imSessionHandler,
+		WidgetHandler:        widgetHandler,
+		EmailInboundHandler:  emailInboundHandler,
+		IMAssistHandler:      imAssistHandler,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,

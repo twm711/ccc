@@ -35,12 +35,12 @@ type RouterDeps struct {
 	CallHandler        *handler.CallHandler
 
 	// Phase 3
-	CallControlHandler    *handler.CallControlHandler
-	AgentPresenceHandler  *handler.AgentPresenceHandler
-	WebhookConfigHandler  *handler.WebhookConfigHandler
+	CallControlHandler     *handler.CallControlHandler
+	AgentPresenceHandler   *handler.AgentPresenceHandler
+	WebhookConfigHandler   *handler.WebhookConfigHandler
 	ScreenPopConfigHandler *handler.ScreenPopConfigHandler
-	QuickReplyHandler     *handler.QuickReplyHandler
-	SmsConfigHandler      *handler.SmsConfigHandler
+	QuickReplyHandler      *handler.QuickReplyHandler
+	SmsConfigHandler       *handler.SmsConfigHandler
 
 	// Phase 4
 	DashboardHandler *handler.DashboardHandler
@@ -61,6 +61,13 @@ type RouterDeps struct {
 	KnowledgeHandler   *handler.KnowledgeHandler
 	AgentScriptHandler *handler.AgentScriptHandler
 	SessionInfoHandler *handler.SessionInfoHandler
+
+	// Phase 8
+	IMChannelHandler    *handler.IMChannelHandler
+	IMSessionHandler    *handler.IMSessionHandler
+	WidgetHandler       *handler.WidgetHandler
+	EmailInboundHandler *handler.EmailInboundHandler
+	IMAssistHandler     *handler.IMAssistHandler
 
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
@@ -276,16 +283,14 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/back2back", deps.ReportHandler.Back2BackReport)
 			r.Get("/internal-call", deps.ReportHandler.InternalCallReport)
 			r.Get("/agent-status-log", deps.ReportHandler.AgentStatusLog)
-			r.Get("/agent-status-log/export", deps.ReportHandler.AgentStatusLogExport)
 		})
 
-		r.Route("/csat-configs", func(r chi.Router) {
-			r.Post("/", deps.CSATHandler.CreateConfig)
+		r.Route("/csat", func(r chi.Router) {
+			r.Post("/config", deps.CSATHandler.CreateConfig)
 			r.Get("/", deps.CSATHandler.ListConfigs)
-			r.Put("/{id}", deps.CSATHandler.UpdateConfig)
+			r.Put("/config", deps.CSATHandler.UpdateConfig)
+			r.Get("/results", deps.CSATHandler.ListResults)
 		})
-
-		r.Get("/csat-results", deps.CSATHandler.ListResults)
 
 		// --- Phase 5 Routes ---
 
@@ -397,7 +402,39 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/", deps.SessionInfoHandler.List)
 			r.Put("/{id}", deps.SessionInfoHandler.Update)
 		})
+
+		// --- Phase 8 Routes ---
+
+		r.Route("/im-channels", func(r chi.Router) {
+			r.Post("/", deps.IMChannelHandler.Create)
+			r.Get("/", deps.IMChannelHandler.List)
+			r.Put("/{id}", deps.IMChannelHandler.Update)
+		})
+
+		r.Route("/im-sessions", func(r chi.Router) {
+			r.Get("/", deps.IMSessionHandler.List)
+			r.Get("/{id}", deps.IMSessionHandler.Get)
+			r.Post("/{id}/transfer", deps.IMSessionHandler.Transfer)
+			r.Post("/{id}/close", deps.IMSessionHandler.Close)
+			r.Get("/{id}/messages", deps.IMSessionHandler.ListMessages)
+			r.Post("/{id}/messages", deps.IMSessionHandler.SendMessage)
+		})
+
+		r.Route("/im/ai-assist", func(r chi.Router) {
+			r.Post("/correct", deps.IMAssistHandler.Correct)
+			r.Post("/expand", deps.IMAssistHandler.Expand)
+			r.Post("/optimize", deps.IMAssistHandler.Optimize)
+		})
 	})
+
+	// --- Public Routes (no JWT auth) ---
+
+	r.Route("/api/v1/widget", func(r chi.Router) {
+		r.Post("/sessions", deps.WidgetHandler.CreateSession)
+		r.Post("/sessions/{id}/messages", deps.WidgetHandler.SendMessage)
+	})
+
+	r.Post("/api/v1/email/inbound", deps.EmailInboundHandler.Inbound)
 
 	return r
 }
