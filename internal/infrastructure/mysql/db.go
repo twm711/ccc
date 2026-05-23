@@ -1,0 +1,17 @@
+package mysql
+
+import (
+	"github.com/jmoiron/sqlx"
+
+	_ "github.com/go-sql-driver/mysql"
+)
+
+func NewDB(dsn string) (*sqlx.DB, error) {
+	db, err := sqlx.Connect("mysql", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(50)
+	db.SetMaxIdleConns(10)
+	return db, nil
+}
