@@ -532,6 +532,17 @@ func TestValidMediaType(t *testing.T) {
 	assert.False(t, ValidMediaType(MediaType("")))
 }
 
+func TestCallService_InvalidMediaType_Rejected(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	_, err := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID:  1,
+		Caller:    "+8613800001111",
+		Callee:    "+862188880001",
+		MediaType: MediaType("foobar"),
+	})
+	assert.ErrorIs(t, err, ErrInvalidMediaType)
+}
+
 func TestCallService_ListCalls_FilterMediaType(t *testing.T) {
 	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
 	ctx := context.Background()
