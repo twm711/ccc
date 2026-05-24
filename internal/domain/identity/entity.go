@@ -45,17 +45,18 @@ const (
 )
 
 type User struct {
-	ID          int64      `db:"id" json:"id"`
-	TenantID    int64      `db:"tenant_id" json:"tenant_id"`
-	Username    string     `db:"username" json:"username"`
-	DisplayName string     `db:"display_name" json:"display_name"`
-	Email       string     `db:"email" json:"email"`
-	Phone       string     `db:"phone" json:"phone"`
-	Role        UserRole   `db:"role" json:"role"`
-	Status      UserStatus `db:"status" json:"status"`
-	ExternalUID string     `db:"external_uid" json:"external_uid,omitempty"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	ID           int64      `db:"id" json:"id"`
+	TenantID     int64      `db:"tenant_id" json:"tenant_id"`
+	Username     string     `db:"username" json:"username"`
+	DisplayName  string     `db:"display_name" json:"display_name"`
+	Email        string     `db:"email" json:"email"`
+	Phone        string     `db:"phone" json:"phone"`
+	PasswordHash string     `db:"password_hash" json:"-"`
+	Role         UserRole   `db:"role" json:"role"`
+	Status       UserStatus `db:"status" json:"status"`
+	ExternalUID  string     `db:"external_uid" json:"external_uid,omitempty"`
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type WorkMode string

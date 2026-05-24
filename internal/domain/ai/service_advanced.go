@@ -24,11 +24,44 @@ var (
 	ErrFullDuplexSensitivity  = errors.New("interruption sensitivity must be between 0 and 1")
 )
 
+// ─── Provider interfaces (domain-level, implemented by infrastructure) ───
+
+type CommAgentAIProvider interface {
+	GenerateReply(ctx context.Context, systemPrompt, conversationHistory, userMessage string) (string, error)
+	ShouldTransfer(ctx context.Context, systemPrompt, conversationHistory string) (bool, string, error)
+}
+
+type VoiceCloningAIProvider interface {
+	StartCloneTraining(ctx context.Context, sampleAudioURL string) (providerJobID string, err error)
+	CheckTrainingStatus(ctx context.Context, providerJobID string) (ready bool, providerVoiceID string, err error)
+}
+
+type ConversationAnalyticsAIProvider interface {
+	MineIntents(ctx context.Context, transcripts []string) (resultJSON string, err error)
+}
+
+type RingAnalysisAIProvider interface {
+	AnalyzeRingAudio(ctx context.Context, audioData []byte) (result string, confidence float64, err error)
+}
+
+type FullDuplexAIProvider interface {
+	DetectInterruption(ctx context.Context, audioChunk []byte, sensitivity float64) (interrupted bool, err error)
+}
+
+type TrainingAIProvider interface {
+	EvaluateSimulatedCall(ctx context.Context, scenario, transcript string) (feedback string, score int, err error)
+}
+
 // ─── CommAgent Service ───
 
 type CommAgentService struct {
 	agentRepo   CommAgentRepository
 	sessionRepo CommAgentSessionRepository
+	aiProvider  CommAgentAIProvider
+}
+
+func (s *CommAgentService) SetCommAgentProvider(p CommAgentAIProvider) {
+	s.aiProvider = p
 }
 
 func NewCommAgentService(ar CommAgentRepository, sr CommAgentSessionRepository) *CommAgentService {
@@ -137,11 +170,16 @@ func (s *CommAgentService) EndSession(ctx context.Context, sess *CommAgentSessio
 // ─── VoiceProfile Service ───
 
 type VoiceProfileService struct {
-	repo VoiceProfileRepository
+	repo       VoiceProfileRepository
+	aiProvider VoiceCloningAIProvider
 }
 
 func NewVoiceProfileService(r VoiceProfileRepository) *VoiceProfileService {
 	return &VoiceProfileService{repo: r}
+}
+
+func (s *VoiceProfileService) SetVoiceCloningProvider(p VoiceCloningAIProvider) {
+	s.aiProvider = p
 }
 
 type CreateVoiceProfileInput struct {
@@ -221,11 +259,16 @@ func (s *VoiceProfileService) Delete(ctx context.Context, tenantID, id int64) er
 // ─── ConversationAnalysis Service ───
 
 type ConversationAnalysisService struct {
-	repo ConversationAnalysisTaskRepository
+	repo       ConversationAnalysisTaskRepository
+	aiProvider ConversationAnalyticsAIProvider
 }
 
 func NewConversationAnalysisService(r ConversationAnalysisTaskRepository) *ConversationAnalysisService {
 	return &ConversationAnalysisService{repo: r}
+}
+
+func (s *ConversationAnalysisService) SetAnalyticsProvider(p ConversationAnalyticsAIProvider) {
+	s.aiProvider = p
 }
 
 type CreateAnalysisTaskInput struct {
@@ -291,6 +334,11 @@ type TrainingService struct {
 	courseRepo TrainingCourseRepository
 	examRepo  TrainingExamRepository
 	simRepo   SimulatedCallRepository
+	aiProvider TrainingAIProvider
+}
+
+func (s *TrainingService) SetTrainingProvider(p TrainingAIProvider) {
+	s.aiProvider = p
 }
 
 func NewTrainingService(cr TrainingCourseRepository, er TrainingExamRepository, sr SimulatedCallRepository) *TrainingService {
@@ -430,6 +478,11 @@ func (s *TrainingService) ListSimulatedCalls(ctx context.Context, tenantID, agen
 type RingAnalysisService struct {
 	configRepo RingAnalysisConfigRepository
 	logRepo    RingAnalysisLogRepository
+	aiProvider RingAnalysisAIProvider
+}
+
+func (s *RingAnalysisService) SetRingAnalysisProvider(p RingAnalysisAIProvider) {
+	s.aiProvider = p
 }
 
 func NewRingAnalysisService(cr RingAnalysisConfigRepository, lr RingAnalysisLogRepository) *RingAnalysisService {
@@ -471,11 +524,16 @@ func (s *RingAnalysisService) GetCallLogs(ctx context.Context, tenantID, callID 
 // ─── FullDuplex Service ───
 
 type FullDuplexService struct {
-	repo FullDuplexConfigRepository
+	repo       FullDuplexConfigRepository
+	aiProvider FullDuplexAIProvider
 }
 
 func NewFullDuplexService(r FullDuplexConfigRepository) *FullDuplexService {
 	return &FullDuplexService{repo: r}
+}
+
+func (s *FullDuplexService) SetFullDuplexProvider(p FullDuplexAIProvider) {
+	s.aiProvider = p
 }
 
 func (s *FullDuplexService) GetConfig(ctx context.Context, tenantID int64) (*FullDuplexConfig, error) {

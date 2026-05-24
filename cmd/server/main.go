@@ -1,16 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/divord97/ccc/internal/application/aianalysis"
 	"github.com/divord97/ccc/internal/application/b2b"
 	"github.com/divord97/ccc/internal/application/csat"
+	"github.com/divord97/ccc/internal/application/dashboard"
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/application/email"
 	"github.com/divord97/ccc/internal/application/imassist"
+	"github.com/divord97/ccc/internal/application/imhub"
 	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/ai"
@@ -139,7 +145,11 @@ func main() {
 	// --- Phase 6 Domain Services ---
 	campaignSvc := campaign.NewCampaignService(campaignRepo, campaignCaseRepo)
 	trunkHealthSvc := telephony.NewTrunkHealthService(sipTrunkRepo, trunkGroupRepo)
-	_ = trunkHealthSvc
+
+	// WebSocket Hubs
+	dashboardHub := dashboard.NewHub(dashboardSvc, logger)
+	go dashboardHub.StartBroadcast(context.Background())
+	imHub := imhub.NewHub(logger)
 
 	// --- Phase 7 Domain Services ---
 	customerSvc := crm.NewCustomerService(customerRepo, customerPhoneRepo, interactionRepo, customFieldRepo)
@@ -248,6 +258,12 @@ func main() {
 	asrHotwordsHandler := handler.NewASRHotwordsHandler(asrHotwordsSvc)
 	performanceHandler := handler.NewPerformanceHandler(performanceSvc)
 
+	// Auth
+	authHandler := handler.NewAuthHandler(userRepo, cfg.JWT.Secret)
+
+	// Trunk Health
+	trunkHealthHandler := handler.NewTrunkHealthHandler(trunkHealthSvc)
+
 	// Social Channels
 	socialChannelHandler := handler.NewSocialChannelHandler(socialChannelSvc)
 
@@ -304,20 +320,19 @@ func main() {
 		trainingProv = llm.NewStubTrainingProvider()
 		logger.Warn().Msg("Advanced AI: DASHSCOPE_API_KEY not set, using stub providers")
 	}
-	_ = commAgentProv
-	_ = voiceCloneProv
-	_ = convAnalyticsProv
-	_ = ringAnalysisProv
-	_ = fullDuplexProv
-	_ = trainingProv
-
 	// Advanced AI Domain Services
 	commAgentSvc := ai.NewCommAgentService(commAgentRepo, commAgentSessionRepo)
+	commAgentSvc.SetCommAgentProvider(commAgentProv)
 	voiceProfileSvc := ai.NewVoiceProfileService(voiceProfileRepo)
+	voiceProfileSvc.SetVoiceCloningProvider(voiceCloneProv)
 	conversationAnalysisSvc := ai.NewConversationAnalysisService(analysisTaskRepo)
+	conversationAnalysisSvc.SetAnalyticsProvider(convAnalyticsProv)
 	trainingSvc := ai.NewTrainingService(trainingCourseRepo, trainingExamRepo, simulatedCallRepo)
+	trainingSvc.SetTrainingProvider(trainingProv)
 	ringAnalysisSvc := ai.NewRingAnalysisService(ringAnalysisConfigRepo, ringAnalysisLogRepo)
+	ringAnalysisSvc.SetRingAnalysisProvider(ringAnalysisProv)
 	fullDuplexSvc := ai.NewFullDuplexService(fullDuplexConfigRepo)
+	fullDuplexSvc.SetFullDuplexProvider(fullDuplexProv)
 
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
@@ -350,6 +365,7 @@ func main() {
 		CampaignHandler:      campaignHandler,
 		B2BHandler:           b2bHandler,
 		TrunkGroupHandler:    trunkGroupHandler,
+		TrunkHealthHandler:   trunkHealthHandler,
 		CustomerHandler:      customerHandler,
 		TicketHandler:        ticketHandler,
 		KnowledgeHandler:     knowledgeHandler,
@@ -375,6 +391,9 @@ func main() {
 		RingSvc:                ringAnalysisSvc,
 		FullDuplexSvc:          fullDuplexSvc,
 		SocialChannelHandler:  socialChannelHandler,
+		AuthHandler:          authHandler,
+		DashboardHub:         dashboardHub,
+		IMHub:                imHub,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,
@@ -382,8 +401,23 @@ func main() {
 	})
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
+	srv := &http.Server{Addr: addr, Handler: router}
+
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		logger.Info().Msg("shutting down server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			logger.Error().Err(err).Msg("server shutdown error")
+		}
+	}()
+
 	logger.Info().Str("addr", addr).Msg("starting CCC server")
-	if err := http.ListenAndServe(addr, router); err != nil {
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatal().Err(err).Msg("server error")
 	}
+	logger.Info().Msg("server stopped")
 }

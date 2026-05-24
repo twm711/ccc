@@ -66,11 +66,11 @@ func Load() *Config {
 			NodeID: int64(envOrInt("SNOWFLAKE_NODE_ID", 1)),
 		},
 		Aliyun: AliyunConfig{
-			AccessKeyID:     envOr("ALIYUN_ACCESS_KEY_ID", ""),
-			AccessKeySecret: envOr("ALIYUN_ACCESS_KEY_SECRET", ""),
-			NLSAppKey:       envOr("ALIYUN_NLS_APP_KEY", ""),
-			DashScopeAPIKey: envOr("DASHSCOPE_API_KEY", ""),
-			DashScopeModel:  envOr("DASHSCOPE_MODEL", "qwen-plus"),
+			AccessKeyID:     envOrChain("ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_ID"),
+			AccessKeySecret: envOrChain("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "ALIBABA_ACCESS_KEY_SECRET", "ALIYUN_ACCESS_KEY_SECRET"),
+			NLSAppKey:       envOrChain("NLS_APP_KEY", "NLS_PROJECT_APP_KEY", "ALIBABA_STT_APPKEY", "ALIYUN_NLS_APP_KEY"),
+			DashScopeAPIKey: envOrChain("DASHSCOPE_API_KEY", "TONGYI_API_KEY"),
+			DashScopeModel:  envOrChainDefault("qwen-plus", "DASHSCOPE_MODEL", "TONGYI_MODEL"),
 		},
 	}
 }
@@ -87,6 +87,22 @@ func envOrInt(key string, fallback int) int {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
 		}
+	}
+	return fallback
+}
+
+func envOrChain(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func envOrChainDefault(fallback string, keys ...string) string {
+	if v := envOrChain(keys...); v != "" {
+		return v
 	}
 	return fallback
 }

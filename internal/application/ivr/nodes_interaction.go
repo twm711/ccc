@@ -52,12 +52,47 @@ func (h *SatisfactionRatingHandler) Handle(_ context.Context, sess *Session, nod
 	return "success", nil
 }
 
-// ASRHandler uses speech recognition for voice input (Phase 9 stub).
-type ASRHandler struct{}
+// Transcriber is an interface for speech-to-text transcription.
+type Transcriber interface {
+	Transcribe(ctx context.Context, audioURL string) (string, error)
+}
 
-func (h *ASRHandler) Handle(_ context.Context, sess *Session, _ routing.FlowNode) (string, error) {
-	// Stub: ASR integration deferred to Phase 9
-	sess.Variables["asr_result"] = ""
+// ASRHandler uses speech recognition for voice input.
+type ASRHandler struct {
+	Transcriber Transcriber
+}
+
+type asrConfig struct {
+	AudioVariable string `json:"audio_variable"`
+	TimeoutSec    int    `json:"timeout_sec"`
+}
+
+func (h *ASRHandler) Handle(ctx context.Context, sess *Session, node routing.FlowNode) (string, error) {
+	var cfg asrConfig
+	_ = parseConfig(node.Config, &cfg)
+
+	if h.Transcriber == nil {
+		sess.Variables["asr_result"] = ""
+		return "success", nil
+	}
+
+	audioURL := sess.Variables[cfg.AudioVariable]
+	if audioURL == "" {
+		audioURL = sess.Variables["asr_audio_file"]
+	}
+	if audioURL == "" {
+		sess.Variables["asr_result"] = ""
+		return "no_input", nil
+	}
+
+	text, err := h.Transcriber.Transcribe(ctx, audioURL)
+	if err != nil {
+		sess.Variables["asr_result"] = ""
+		sess.Variables["asr_error"] = err.Error()
+		return "error", nil
+	}
+
+	sess.Variables["asr_result"] = text
 	return "success", nil
 }
 

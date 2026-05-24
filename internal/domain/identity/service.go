@@ -472,6 +472,10 @@ func (s *AgentPresenceService) GetPresence(ctx context.Context, agentID int64) (
 	return s.presence.GetByAgentID(ctx, agentID)
 }
 
+func (s *AgentPresenceService) ListByTenant(ctx context.Context, tenantID int64) ([]*AgentPresence, error) {
+	return s.presence.ListByTenant(ctx, tenantID)
+}
+
 func (s *AgentPresenceService) logTransition(ctx context.Context, p *AgentPresence) {
 	dur := int(time.Since(p.LastStatusAt).Seconds())
 	_ = s.logs.Create(ctx, &AgentPresenceLog{

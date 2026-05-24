@@ -1,6 +1,8 @@
 package http
 
 import (
+	"net/http"
+
 	"github.com/divord97/ccc/internal/domain/ai"
 	"github.com/divord97/ccc/internal/domain/platform"
 	"github.com/divord97/ccc/internal/infrastructure/redis"
@@ -52,9 +54,10 @@ type RouterDeps struct {
 	ProfileHandler *handler.ProfileHandler
 
 	// Phase 6
-	CampaignHandler   *handler.CampaignHandler
-	B2BHandler        *handler.B2BHandler
-	TrunkGroupHandler *handler.TrunkGroupHandler
+	CampaignHandler    *handler.CampaignHandler
+	B2BHandler         *handler.B2BHandler
+	TrunkGroupHandler  *handler.TrunkGroupHandler
+	TrunkHealthHandler *handler.TrunkHealthHandler
 
 	// Phase 7
 	CustomerHandler    *handler.CustomerHandler
@@ -93,6 +96,13 @@ type RouterDeps struct {
 	// Social Channels
 	SocialChannelHandler *handler.SocialChannelHandler
 
+	// Auth
+	AuthHandler *handler.AuthHandler
+
+	// WebSocket Hubs
+	DashboardHub interface{ ServeWS(http.ResponseWriter, *http.Request) }
+	IMHub        interface{ ServeWS(http.ResponseWriter, *http.Request) }
+
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
 	AuditLogRepo platform.AuditLogRepository
@@ -105,11 +115,15 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.RequestID)
+	r.Use(middleware.CORS)
 	r.Use(middleware.Metrics)
 	r.Use(middleware.RequestLogger(deps.Logger))
 
 	r.Get("/health", handler.Health)
 	r.Handle("/metrics", promhttp.Handler())
+
+	// Public auth route (no JWT)
+	r.Post("/api/v1/auth/login", deps.AuthHandler.Login)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.Auth(deps.JWTSecret))
@@ -250,6 +264,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		// --- Phase 3 Routes ---
 
 		r.Route("/agent-presence", func(r chi.Router) {
+			r.Get("/", deps.AgentPresenceHandler.ListByTenant)
+			r.Post("/status", deps.AgentPresenceHandler.ChangeStatus)
 			r.Post("/check-in", deps.AgentPresenceHandler.CheckIn)
 			r.Post("/{agentId}/check-out", deps.AgentPresenceHandler.CheckOut)
 			r.Post("/{agentId}/transition", deps.AgentPresenceHandler.Transition)
@@ -292,21 +308,21 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Route("/dashboard", func(r chi.Router) {
 			r.Get("/overview", deps.DashboardHandler.Overview)
-			r.Get("/agent-status", deps.DashboardHandler.AgentStatus)
-			r.Get("/skill-group-status", deps.DashboardHandler.SkillGroupStatus)
-			r.Get("/call-trend", deps.DashboardHandler.CallTrend)
-			r.Get("/call-funnel", deps.DashboardHandler.CallFunnel)
+			r.Get("/agents", deps.DashboardHandler.AgentStatus)
+			r.Get("/skill-groups", deps.DashboardHandler.SkillGroupStatus)
+			r.Get("/trend", deps.DashboardHandler.CallTrend)
+			r.Get("/funnel", deps.DashboardHandler.CallFunnel)
 		})
 
 		r.Route("/reports", func(r chi.Router) {
-			r.Get("/agent", deps.ReportHandler.AgentReport)
-			r.Get("/agent/export", deps.ReportHandler.AgentReportExport)
-			r.Get("/group-agent", deps.ReportHandler.GroupAgentReport)
-			r.Get("/group-agent/export", deps.ReportHandler.GroupAgentReportExport)
-			r.Get("/skill-group", deps.ReportHandler.SkillGroupReport)
-			r.Get("/skill-group/export", deps.ReportHandler.SkillGroupReportExport)
+			r.Get("/agents", deps.ReportHandler.AgentReport)
+			r.Get("/agents/export", deps.ReportHandler.AgentReportExport)
+			r.Get("/group-agents", deps.ReportHandler.GroupAgentReport)
+			r.Get("/group-agents/export", deps.ReportHandler.GroupAgentReportExport)
+			r.Get("/skill-groups", deps.ReportHandler.SkillGroupReport)
+			r.Get("/skill-groups/export", deps.ReportHandler.SkillGroupReportExport)
 			r.Get("/back2back", deps.ReportHandler.Back2BackReport)
-			r.Get("/internal-call", deps.ReportHandler.InternalCallReport)
+			r.Get("/internal-calls", deps.ReportHandler.InternalCallReport)
 			r.Get("/agent-status-log", deps.ReportHandler.AgentStatusLog)
 		})
 
@@ -363,6 +379,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/{id}/members", deps.TrunkGroupHandler.ListMembers)
 		})
 
+		r.Get("/trunk-health/{trunkId}", deps.TrunkHealthHandler.GetStatus)
+
 		// --- Phase 7 Routes ---
 
 		r.Route("/customers", func(r chi.Router) {
@@ -403,17 +421,18 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Post("/{id}/comments", deps.TicketHandler.AddComment)
 		})
 
-		r.Route("/knowledge-categories", func(r chi.Router) {
-			r.Post("/", deps.KnowledgeHandler.CreateCategory)
-			r.Get("/", deps.KnowledgeHandler.ListCategories)
-		})
-
-		r.Route("/knowledge-articles", func(r chi.Router) {
-			r.Post("/", deps.KnowledgeHandler.CreateArticle)
-			r.Get("/", deps.KnowledgeHandler.ListArticles)
-			r.Get("/search", deps.KnowledgeHandler.Search)
-			r.Get("/{id}", deps.KnowledgeHandler.GetArticle)
-			r.Put("/{id}", deps.KnowledgeHandler.UpdateArticle)
+		r.Route("/knowledge", func(r chi.Router) {
+			r.Route("/categories", func(r chi.Router) {
+				r.Post("/", deps.KnowledgeHandler.CreateCategory)
+				r.Get("/", deps.KnowledgeHandler.ListCategories)
+			})
+			r.Route("/articles", func(r chi.Router) {
+				r.Post("/", deps.KnowledgeHandler.CreateArticle)
+				r.Get("/", deps.KnowledgeHandler.ListArticles)
+				r.Get("/search", deps.KnowledgeHandler.Search)
+				r.Get("/{id}", deps.KnowledgeHandler.GetArticle)
+				r.Put("/{id}", deps.KnowledgeHandler.UpdateArticle)
+			})
 		})
 
 		r.Route("/agent-scripts", func(r chi.Router) {
@@ -597,6 +616,25 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	})
 
 	r.Post("/api/v1/email/inbound", deps.EmailInboundHandler.Inbound)
+
+	// --- WebSocket Routes (auth handled inside handler via query param) ---
+	r.Route("/api/v1/ws", func(r chi.Router) {
+		r.Get("/dashboard", func(w http.ResponseWriter, r *http.Request) {
+			if deps.DashboardHub != nil {
+				deps.DashboardHub.ServeWS(w, r)
+			}
+		})
+		r.Get("/im", func(w http.ResponseWriter, r *http.Request) {
+			if deps.IMHub != nil {
+				deps.IMHub.ServeWS(w, r)
+			}
+		})
+		r.Get("/agent-events", func(w http.ResponseWriter, r *http.Request) {
+			if deps.DashboardHub != nil {
+				deps.DashboardHub.ServeWS(w, r)
+			}
+		})
+	})
 
 	// --- Social Channel Webhooks (public, no JWT) ---
 	r.Route("/api/v1/social", func(r chi.Router) {

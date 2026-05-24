@@ -3,10 +3,17 @@ package imhub
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 // IMEvent represents a message event sent over WebSocket.
 type IMEvent struct {
@@ -20,6 +27,7 @@ type Client struct {
 	ID        string
 	SessionID int64
 	Send      chan []byte
+	conn      *websocket.Conn
 }
 
 // Hub manages WebSocket connections for IM real-time messaging.
@@ -49,12 +57,14 @@ func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if clients, ok := h.clients[c.SessionID]; ok {
-		delete(clients, c)
+		if _, exists := clients[c]; exists {
+			delete(clients, c)
+			close(c.Send)
+		}
 		if len(clients) == 0 {
 			delete(h.clients, c.SessionID)
 		}
 	}
-	close(c.Send)
 }
 
 // Broadcast sends an event to all clients in a session.
@@ -77,10 +87,52 @@ func (h *Hub) Broadcast(sessionID int64, event IMEvent) {
 	}
 }
 
-// ServeWS is a placeholder for WebSocket upgrade handling.
+// ServeWS upgrades HTTP to WebSocket for IM messaging.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
-	// In production, use gorilla/websocket or nhooyr.io/websocket for upgrade.
-	// This is a structural placeholder — actual WebSocket upgrade is deferred
-	// to frontend integration phase.
-	http.Error(w, "websocket endpoint: use a WebSocket client", http.StatusUpgradeRequired)
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("im ws upgrade failed")
+		return
+	}
+
+	clientID := r.URL.Query().Get("client_id")
+	sessionID, _ := strconv.ParseInt(r.URL.Query().Get("session_id"), 10, 64)
+
+	c := &Client{
+		ID:        clientID,
+		SessionID: sessionID,
+		Send:      make(chan []byte, 64),
+		conn:      conn,
+	}
+	h.Register(c)
+
+	go h.writePump(c)
+	go h.readPump(c)
+}
+
+func (h *Hub) writePump(c *Client) {
+	defer c.conn.Close()
+	for msg := range c.Send {
+		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
+}
+
+func (h *Hub) readPump(c *Client) {
+	defer func() {
+		h.Unregister(c)
+		c.conn.Close()
+	}()
+	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+	for {
+		_, _, err := c.conn.ReadMessage()
+		if err != nil {
+			return
+		}
+	}
 }

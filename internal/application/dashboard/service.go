@@ -4,12 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/report"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
+
+var upgrader = websocket.Upgrader{
+	CheckOrigin: func(r *http.Request) bool { return true },
+}
 
 // Hub manages WebSocket connections and broadcasts dashboard updates.
 type Hub struct {
@@ -22,6 +28,7 @@ type Hub struct {
 type Client struct {
 	TenantID int64
 	Send     chan []byte
+	conn     *websocket.Conn
 }
 
 func NewHub(dashSvc *report.DashboardService, logger zerolog.Logger) *Hub {
@@ -40,8 +47,10 @@ func (h *Hub) Register(c *Client) {
 
 func (h *Hub) Unregister(c *Client) {
 	h.mu.Lock()
-	delete(h.clients, c)
-	close(c.Send)
+	if _, ok := h.clients[c]; ok {
+		delete(h.clients, c)
+		close(c.Send)
+	}
 	h.mu.Unlock()
 }
 
@@ -81,12 +90,55 @@ func (h *Hub) broadcastAll(ctx context.Context) {
 		select {
 		case c.Send <- data:
 		default:
-			// Client send buffer full, skip
 		}
 	}
 }
 
-// ServeWS upgrades the HTTP connection to WebSocket (placeholder — actual upgrade in handler).
-func (h *Hub) ServeWS(_ http.ResponseWriter, _ *http.Request) {
-	// WebSocket upgrade is handled in the HTTP handler layer.
+// ServeWS upgrades HTTP to WebSocket and manages the client lifecycle.
+func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("dashboard ws upgrade failed")
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	c := &Client{
+		TenantID: tenantID,
+		Send:     make(chan []byte, 64),
+		conn:     conn,
+	}
+	h.Register(c)
+
+	go h.writePump(c)
+	go h.readPump(c)
+}
+
+func (h *Hub) writePump(c *Client) {
+	defer func() {
+		c.conn.Close()
+	}()
+	for msg := range c.Send {
+		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+			return
+		}
+	}
+}
+
+func (h *Hub) readPump(c *Client) {
+	defer func() {
+		h.Unregister(c)
+		c.conn.Close()
+	}()
+	c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+	for {
+		_, _, err := c.conn.ReadMessage()
+		if err != nil {
+			return
+		}
+	}
 }

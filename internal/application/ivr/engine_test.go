@@ -15,7 +15,7 @@ func makeGraph(nodes []routing.FlowNode) *routing.FlowGraph {
 }
 
 func TestEngine_SimpleFlow_StartPlayEnd(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, map[string]string{"caller": "+86138"})
 
 	g := makeGraph([]routing.FlowNode{
@@ -32,7 +32,7 @@ func TestEngine_SimpleFlow_StartPlayEnd(t *testing.T) {
 }
 
 func TestEngine_BranchCondition(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, map[string]string{"level": "vip"})
 
 	g := makeGraph([]routing.FlowNode{
@@ -55,7 +55,7 @@ func TestEngine_BranchCondition(t *testing.T) {
 }
 
 func TestEngine_BranchDefaultPath(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, map[string]string{"level": "unknown"})
 
 	g := makeGraph([]routing.FlowNode{
@@ -73,7 +73,7 @@ func TestEngine_BranchDefaultPath(t *testing.T) {
 }
 
 func TestEngine_SetVariable(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, nil)
 
 	g := makeGraph([]routing.FlowNode{
@@ -91,7 +91,7 @@ func TestEngine_SetVariable(t *testing.T) {
 }
 
 func TestEngine_HangupReason(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, nil)
 
 	g := makeGraph([]routing.FlowNode{
@@ -106,7 +106,7 @@ func TestEngine_HangupReason(t *testing.T) {
 }
 
 func TestEngine_CollectDTMF(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, nil)
 
 	g := makeGraph([]routing.FlowNode{
@@ -121,7 +121,7 @@ func TestEngine_CollectDTMF(t *testing.T) {
 }
 
 func TestEngine_TransferToAgent(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, nil)
 
 	g := makeGraph([]routing.FlowNode{
@@ -137,7 +137,7 @@ func TestEngine_TransferToAgent(t *testing.T) {
 }
 
 func TestEngine_FullFlow_AllNodeTypes(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, nil)
 
 	// Linear chain through all 20 node types
@@ -170,7 +170,7 @@ func TestEngine_FullFlow_AllNodeTypes(t *testing.T) {
 }
 
 func TestEngine_NoStartNode_Error(t *testing.T) {
-	e := DefaultEngine()
+	e := DefaultEngine(nil)
 	sess := NewSession(1, 1, 1, nil)
 
 	g := makeGraph([]routing.FlowNode{

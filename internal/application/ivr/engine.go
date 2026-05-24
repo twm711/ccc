@@ -113,7 +113,8 @@ func NewSession(callID, tenantID, flowID int64, sysVars map[string]string) *Sess
 }
 
 // DefaultEngine returns an engine with all built-in node handlers registered.
-func DefaultEngine() *Engine {
+// An optional Transcriber can be provided to enable ASR node functionality.
+func DefaultEngine(transcriber Transcriber) *Engine {
 	e := NewEngine()
 	e.RegisterHandler(routing.NodeStart, &StartHandler{})
 	e.RegisterHandler(routing.NodePlay, &PlayHandler{})
@@ -127,7 +128,7 @@ func DefaultEngine() *Engine {
 	e.RegisterHandler(routing.NodeJSONParser, &JSONParserHandler{})
 	e.RegisterHandler(routing.NodeSMS, &SMSHandler{})
 	e.RegisterHandler(routing.NodeSatisfactionRating, &SatisfactionRatingHandler{})
-	e.RegisterHandler(routing.NodeASR, &ASRHandler{})
+	e.RegisterHandler(routing.NodeASR, &ASRHandler{Transcriber: transcriber})
 	e.RegisterHandler(routing.NodeVoicemail, &VoicemailHandler{})
 	e.RegisterHandler(routing.NodeTransferToAgent, &TransferToAgentHandler{})
 	e.RegisterHandler(routing.NodeTransferToExternal, &TransferToExternalHandler{})

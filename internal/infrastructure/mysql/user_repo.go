@@ -17,15 +17,15 @@ func NewUserRepo(db *sqlx.DB) *UserRepo {
 
 func (r *UserRepo) Create(ctx context.Context, u *identity.User) error {
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO users (id, tenant_id, user_name, display_name, email, phone, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		u.ID, u.TenantID, u.Username, u.DisplayName, u.Email, u.Phone, u.Role, u.Status, u.CreatedAt, u.UpdatedAt)
+		`INSERT INTO users (id, tenant_id, user_name, display_name, email, phone, password_hash, role, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		u.ID, u.TenantID, u.Username, u.DisplayName, u.Email, u.Phone, u.PasswordHash, u.Role, u.Status, u.CreatedAt, u.UpdatedAt)
 	return err
 }
 
 func (r *UserRepo) GetByID(ctx context.Context, id int64) (*identity.User, error) {
 	var u identity.User
 	err := r.db.GetContext(ctx, &u,
-		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, role, status, created_at, updated_at FROM users WHERE id = ? AND status != 'deleted'`, id)
+		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, COALESCE(password_hash,'') AS password_hash, role, status, created_at, updated_at FROM users WHERE id = ? AND status != 'deleted'`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -35,8 +35,19 @@ func (r *UserRepo) GetByID(ctx context.Context, id int64) (*identity.User, error
 func (r *UserRepo) GetByUsername(ctx context.Context, tenantID int64, username string) (*identity.User, error) {
 	var u identity.User
 	err := r.db.GetContext(ctx, &u,
-		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, role, status, created_at, updated_at FROM users WHERE tenant_id = ? AND user_name = ? AND status != 'deleted'`,
+		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, COALESCE(password_hash,'') AS password_hash, role, status, created_at, updated_at FROM users WHERE tenant_id = ? AND user_name = ? AND status != 'deleted'`,
 		tenantID, username)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
+func (r *UserRepo) FindByUsernameGlobal(ctx context.Context, username string) (*identity.User, error) {
+	var u identity.User
+	err := r.db.GetContext(ctx, &u,
+		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, COALESCE(password_hash,'') AS password_hash, role, status, created_at, updated_at FROM users WHERE user_name = ? AND status = 'active' LIMIT 1`,
+		username)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +70,7 @@ func (r *UserRepo) List(ctx context.Context, tenantID int64, offset, limit int) 
 
 	var users []*identity.User
 	err = r.db.SelectContext(ctx, &users,
-		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, role, status, created_at, updated_at FROM users WHERE tenant_id = ? AND status != 'deleted' ORDER BY id LIMIT ? OFFSET ?`,
+		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, COALESCE(password_hash,'') AS password_hash, role, status, created_at, updated_at FROM users WHERE tenant_id = ? AND status != 'deleted' ORDER BY id LIMIT ? OFFSET ?`,
 		tenantID, limit, offset)
 	return users, total, err
 }

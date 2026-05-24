@@ -8,11 +8,20 @@ import (
 	"github.com/divord97/ccc/pkg/snowflake"
 )
 
+// TelephonyProvider abstracts ESL/telephony operations for call control.
+type TelephonyProvider interface {
+	TransferCall(ctx context.Context, uuid, dest string) error
+	HoldCall(ctx context.Context, uuid string) error
+	RetrieveCall(ctx context.Context, uuid string) error
+	Originate(ctx context.Context, dest, callerID, context_ string) (string, error)
+}
+
 type CallService struct {
 	calls     CallRepository
 	events    CallEventRepository
 	tracking  IVRTrackingRepository
 	callbacks CallbackRequestRepository
+	telephony TelephonyProvider
 }
 
 func NewCallService(cr CallRepository, er CallEventRepository, tr IVRTrackingRepository, cbr ...CallbackRequestRepository) *CallService {
@@ -21,6 +30,11 @@ func NewCallService(cr CallRepository, er CallEventRepository, tr IVRTrackingRep
 		s.callbacks = cbr[0]
 	}
 	return s
+}
+
+// SetTelephonyProvider sets the telephony provider for ESL-based call control.
+func (s *CallService) SetTelephonyProvider(tp TelephonyProvider) {
+	s.telephony = tp
 }
 
 type CreateCallInput struct {

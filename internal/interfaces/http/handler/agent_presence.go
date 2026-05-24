@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/identity"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -118,6 +119,43 @@ func (h *AgentPresenceHandler) GetPresence(w http.ResponseWriter, r *http.Reques
 	p, err := h.svc.GetPresence(r.Context(), agentID)
 	if err != nil || p == nil {
 		response.Error(w, http.StatusNotFound, "presence not found")
+		return
+	}
+	response.JSON(w, http.StatusOK, p)
+}
+
+func (h *AgentPresenceHandler) ListByTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	list, err := h.svc.ListByTenant(r.Context(), tenantID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, list)
+}
+
+func (h *AgentPresenceHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Status string `json:"status"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	userID := middleware.UserIDFromCtx(r.Context())
+	if in.Status == "break" && in.Reason != "" {
+		p, err := h.svc.SetBreak(r.Context(), userID, in.Reason)
+		if err != nil {
+			response.Error(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		response.JSON(w, http.StatusOK, p)
+		return
+	}
+	p, err := h.svc.TransitionTo(r.Context(), userID, identity.AgentPresenceStatus(in.Status))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	response.JSON(w, http.StatusOK, p)
