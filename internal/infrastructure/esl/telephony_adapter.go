@@ -43,6 +43,26 @@ func (a *TelephonyAdapter) Eavesdrop(ctx context.Context, spyUUID, targetUUID st
 	return a.client.Eavesdrop(ctx, spyUUID, targetUUID)
 }
 
+func (a *TelephonyAdapter) EavesdropWhisper(ctx context.Context, spyUUID, targetUUID string) error {
+	return a.client.EavesdropWhisper(ctx, spyUUID, targetUUID)
+}
+
+func (a *TelephonyAdapter) EavesdropBarge(ctx context.Context, spyUUID, targetUUID string) error {
+	return a.client.EavesdropBarge(ctx, spyUUID, targetUUID)
+}
+
+func (a *TelephonyAdapter) Intercept(ctx context.Context, interceptorUUID, targetUUID string) error {
+	return a.client.Intercept(ctx, interceptorUUID, targetUUID)
+}
+
+func (a *TelephonyAdapter) Coach(ctx context.Context, coachUUID, targetUUID string) error {
+	return a.client.Coach(ctx, coachUUID, targetUUID)
+}
+
 func (a *TelephonyAdapter) Conference(ctx context.Context, uuid, confName string) error {
 	return a.client.Conference(ctx, uuid, confName)
+}
+
+func (a *TelephonyAdapter) WhisperAnnouncement(ctx context.Context, uuid, audioFile string) error {
+	return a.client.WhisperAnnouncement(ctx, uuid, audioFile)
 }

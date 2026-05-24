@@ -7,6 +7,7 @@ import (
 
 	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/domain/call"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -21,8 +22,8 @@ func NewCallControlHandler(svc *call.CallService, lc *lifecycle.Service) *CallCo
 }
 
 func (h *CallControlHandler) InboundCall(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var in struct {
-		TenantID      int64  `json:"tenant_id"`
 		Caller        string `json:"caller"`
 		Callee        string `json:"callee"`
 		ChannelUUID   string `json:"channel_uuid"`
@@ -35,7 +36,7 @@ func (h *CallControlHandler) InboundCall(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	c, err := h.lifecycle.HandleInboundCall(r.Context(), call.CreateCallInput{
-		TenantID:      in.TenantID,
+		TenantID:      tenantID,
 		Caller:        in.Caller,
 		Callee:        in.Callee,
 		ChannelUUID:   in.ChannelUUID,
@@ -160,8 +161,8 @@ func (h *CallControlHandler) SendDTMF(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CallControlHandler) RequestCallback(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var in struct {
-		TenantID     int64  `json:"tenant_id"`
 		CallID       int64  `json:"call_id"`
 		SkillGroupID int64  `json:"skill_group_id"`
 		Caller       string `json:"caller"`
@@ -171,7 +172,7 @@ func (h *CallControlHandler) RequestCallback(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	cb := &call.CallbackRequest{
-		TenantID: in.TenantID, CallID: in.CallID, SkillGroupID: in.SkillGroupID, Caller: in.Caller,
+		TenantID: tenantID, CallID: in.CallID, SkillGroupID: in.SkillGroupID, Caller: in.Caller,
 	}
 	if err := h.svc.RequestCallback(r.Context(), cb); err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())

@@ -18,7 +18,12 @@ type TelephonyProvider interface {
 	SendDTMF(ctx context.Context, uuid, digits string) error
 	Bridge(ctx context.Context, uuid1, uuid2 string) error
 	Eavesdrop(ctx context.Context, spyUUID, targetUUID string) error
+	EavesdropWhisper(ctx context.Context, spyUUID, targetUUID string) error
+	EavesdropBarge(ctx context.Context, spyUUID, targetUUID string) error
+	Intercept(ctx context.Context, interceptorUUID, targetUUID string) error
+	Coach(ctx context.Context, coachUUID, targetUUID string) error
 	Conference(ctx context.Context, uuid, confName string) error
+	WhisperAnnouncement(ctx context.Context, uuid, audioFile string) error
 }
 
 type CallService struct {
@@ -553,6 +558,13 @@ func (s *CallService) InitiateConsult(ctx context.Context, id int64, target Tran
 		return nil, ErrMissingTransferTarget
 	}
 
+	// Hold the original call so the customer waits while agent consults
+	if s.tp != nil && c.ChannelUUID != "" {
+		if err := s.tp.Hold(ctx, c.ChannelUUID); err != nil {
+			return nil, fmt.Errorf("consult hold failed: %w", err)
+		}
+	}
+
 	c.Status = CallStatusConsulting
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err
@@ -596,6 +608,11 @@ func (s *CallService) CancelConsult(ctx context.Context, id int64) (*Call, error
 		return nil, ErrCallNotConsulting
 	}
 
+	// Retrieve (unhold) the original call
+	if s.tp != nil && c.ChannelUUID != "" {
+		_ = s.tp.Retrieve(ctx, c.ChannelUUID)
+	}
+
 	c.Status = CallStatusActive
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err
@@ -617,13 +634,20 @@ func (s *CallService) StartConference(ctx context.Context, id int64) (*Call, err
 		return nil, ErrCallNotActive
 	}
 
+	confName := fmt.Sprintf("conf_%d", c.ID)
+	if s.tp != nil && c.ChannelUUID != "" {
+		if err := s.tp.Conference(ctx, c.ChannelUUID, confName); err != nil {
+			return nil, fmt.Errorf("conference failed: %w", err)
+		}
+	}
+
 	c.Status = CallStatusConference
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err
 	}
 	_ = s.events.Create(ctx, &CallEvent{
 		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
-		Event: "conference_started", CreatedAt: time.Now(),
+		Event: "conference_started", Detail: confName, CreatedAt: time.Now(),
 	})
 	return c, nil
 }
@@ -664,6 +688,33 @@ func (s *CallService) MonitorCall(ctx context.Context, tenantID, targetCallID, s
 		Status:       CallStatusActive,
 		StartedAt:    now,
 	}
+
+	// Originate a channel for the supervisor, then apply the monitoring mode via ESL
+	if s.tp != nil && target.ChannelUUID != "" {
+		spyDest := fmt.Sprintf("user/%d", supervisorID)
+		spyUUID, origErr := s.tp.Originate(ctx, spyDest, "monitor", "default")
+		if origErr != nil {
+			return nil, fmt.Errorf("monitor originate failed: %w", origErr)
+		}
+		monitor.ChannelUUID = spyUUID
+
+		var eslErr error
+		switch mode {
+		case "listen":
+			eslErr = s.tp.Eavesdrop(ctx, spyUUID, target.ChannelUUID)
+		case "whisper":
+			eslErr = s.tp.EavesdropWhisper(ctx, spyUUID, target.ChannelUUID)
+		case "barge":
+			eslErr = s.tp.EavesdropBarge(ctx, spyUUID, target.ChannelUUID)
+		case "intercept":
+			eslErr = s.tp.Intercept(ctx, spyUUID, target.ChannelUUID)
+		}
+		if eslErr != nil {
+			_ = s.tp.Hangup(ctx, spyUUID)
+			return nil, fmt.Errorf("monitor %s failed: %w", mode, eslErr)
+		}
+	}
+
 	if err := s.calls.Create(ctx, monitor); err != nil {
 		return nil, err
 	}
@@ -700,6 +751,21 @@ func (s *CallService) CoachCall(ctx context.Context, tenantID, targetCallID, coa
 		Status:       CallStatusActive,
 		StartedAt:    now,
 	}
+
+	// Originate a channel for the coach, then apply coaching mode via ESL
+	if s.tp != nil && target.ChannelUUID != "" {
+		coachDest := fmt.Sprintf("user/%d", coachID)
+		coachUUID, origErr := s.tp.Originate(ctx, coachDest, "coach", "default")
+		if origErr != nil {
+			return nil, fmt.Errorf("coach originate failed: %w", origErr)
+		}
+		coach.ChannelUUID = coachUUID
+		if err := s.tp.Coach(ctx, coachUUID, target.ChannelUUID); err != nil {
+			_ = s.tp.Hangup(ctx, coachUUID)
+			return nil, fmt.Errorf("coach failed: %w", err)
+		}
+	}
+
 	if err := s.calls.Create(ctx, coach); err != nil {
 		return nil, err
 	}
@@ -716,6 +782,11 @@ func (s *CallService) WhisperPreConnect(ctx context.Context, callID int64, messa
 	c, err := s.calls.GetByID(ctx, callID)
 	if err != nil || c == nil {
 		return ErrCallNotFound
+	}
+	if s.tp != nil && c.ChannelUUID != "" {
+		if err := s.tp.WhisperAnnouncement(ctx, c.ChannelUUID, message); err != nil {
+			return fmt.Errorf("whisper announcement failed: %w", err)
+		}
 	}
 	_ = s.events.Create(ctx, &CallEvent{
 		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
