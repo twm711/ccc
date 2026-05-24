@@ -154,8 +154,11 @@ func main() {
 	imSessionRepo := infraMySQL.NewIMSessionRepo(db)
 	imMessageRepo := infraMySQL.NewIMMessageRepo(db)
 
+	socialConfigRepo := infraMySQL.NewSocialChannelConfigRepo(db)
+
 	// --- Phase 8 Domain Services ---
 	imSvc := im.NewIMService(imChannelRepo, imSessionRepo, imMessageRepo, 5)
+	socialChannelSvc := im.NewSocialChannelService(socialConfigRepo, imChannelRepo, imSessionRepo, imMessageRepo)
 
 	// --- Application Services ---
 	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, nil)
@@ -233,6 +236,9 @@ func main() {
 	aiAnalysisHandler := handler.NewAIAnalysisHandler(aiAnalysisSvc)
 	asrHotwordsHandler := handler.NewASRHotwordsHandler(asrHotwordsSvc)
 	performanceHandler := handler.NewPerformanceHandler(performanceSvc)
+
+	// Social Channels
+	socialChannelHandler := handler.NewSocialChannelHandler(socialChannelSvc)
 
 	// Phase 10 Repositories
 	annotationTaskRepo := infraMySQL.NewAnnotationTaskRepo(db)
@@ -324,6 +330,7 @@ func main() {
 		TrainingSvc:            trainingSvc,
 		RingSvc:                ringAnalysisSvc,
 		FullDuplexSvc:          fullDuplexSvc,
+		SocialChannelHandler:  socialChannelHandler,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,

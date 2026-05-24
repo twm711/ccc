@@ -90,6 +90,9 @@ type RouterDeps struct {
 	RingSvc       *ai.RingAnalysisService
 	FullDuplexSvc *ai.FullDuplexService
 
+	// Social Channels
+	SocialChannelHandler *handler.SocialChannelHandler
+
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
 	AuditLogRepo platform.AuditLogRepository
@@ -577,6 +580,13 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Get("/full-duplex/config", handler.GetFullDuplexConfig(deps.FullDuplexSvc))
 		r.Put("/full-duplex/config", handler.UpsertFullDuplexConfig(deps.FullDuplexSvc))
+
+		// --- Social Channel Config ---
+		r.Route("/social-configs", func(r chi.Router) {
+			r.Post("/", deps.SocialChannelHandler.CreateConfig)
+			r.Get("/channels/{channelID}", deps.SocialChannelHandler.GetConfig)
+			r.Delete("/{id}", deps.SocialChannelHandler.DeleteConfig)
+		})
 	})
 
 	// --- Public Routes (no JWT auth) ---
@@ -587,6 +597,14 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	})
 
 	r.Post("/api/v1/email/inbound", deps.EmailInboundHandler.Inbound)
+
+	// --- Social Channel Webhooks (public, no JWT) ---
+	r.Route("/api/v1/social", func(r chi.Router) {
+		r.Get("/wechat/{channelID}", deps.SocialChannelHandler.WeChatVerify)
+		r.Post("/wechat/{channelID}", deps.SocialChannelHandler.WeChatReceive)
+		r.Get("/weibo/{channelID}", deps.SocialChannelHandler.WeiboVerify)
+		r.Post("/weibo/{channelID}", deps.SocialChannelHandler.WeiboReceive)
+	})
 
 	return r
 }

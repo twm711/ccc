@@ -10,6 +10,7 @@ import (
 var validChannelTypes = map[ChannelType]bool{
 	ChannelTypeWebWidget: true, ChannelTypeApp: true, ChannelTypeMiniProg: true,
 	ChannelTypeDingTalk: true, ChannelTypeEmail: true, ChannelTypeAPI: true,
+	ChannelTypeWeChat: true, ChannelTypeWeibo: true,
 }
 
 var validContentTypes = map[ContentType]bool{
