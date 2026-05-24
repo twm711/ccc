@@ -64,15 +64,16 @@ const (
 
 // VoiceProfile represents a custom TTS voice clone.
 type VoiceProfile struct {
-	ID            int64              `db:"id" json:"id"`
-	TenantID      int64              `db:"tenant_id" json:"tenant_id"`
-	Name          string             `db:"name" json:"name"`
-	SampleAudioURL string            `db:"sample_audio_url" json:"sample_audio_url"`
-	ProviderVoiceID string           `db:"provider_voice_id" json:"provider_voice_id"`
-	Status        VoiceProfileStatus `db:"status" json:"status"`
-	Language      string             `db:"language" json:"language"`
-	CreatedAt     time.Time          `db:"created_at" json:"created_at"`
-	UpdatedAt     time.Time          `db:"updated_at" json:"updated_at"`
+	ID              int64              `db:"id" json:"id"`
+	TenantID        int64              `db:"tenant_id" json:"tenant_id"`
+	Name            string             `db:"name" json:"name"`
+	SampleAudioURL  string             `db:"sample_audio_url" json:"sample_audio_url"`
+	ProviderJobID   string             `db:"provider_job_id" json:"provider_job_id,omitempty"`
+	ProviderVoiceID string             `db:"provider_voice_id" json:"provider_voice_id"`
+	Status          VoiceProfileStatus `db:"status" json:"status"`
+	Language        string             `db:"language" json:"language"`
+	CreatedAt       time.Time          `db:"created_at" json:"created_at"`
+	UpdatedAt       time.Time          `db:"updated_at" json:"updated_at"`
 }
 
 // ─── 3. Conversation Analytics (智能对话分析) ───

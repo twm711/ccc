@@ -62,28 +62,55 @@ func NewService(d Deps) *Service {
 }
 
 // HandleConversationTurn processes a single turn in an autonomous agent conversation.
-func (s *Service) HandleConversationTurn(ctx context.Context, tenantID, commAgentID int64, userMessage string) (string, bool, error) {
+// It manages session lifecycle: creates a session on first turn, records each turn,
+// and ends the session when transfer is recommended or max turns reached.
+func (s *Service) HandleConversationTurn(ctx context.Context, tenantID, commAgentID, callID int64, sessionID *int64, userMessage string) (string, bool, *int64, error) {
 	agent, err := s.commAgentSvc.Get(ctx, tenantID, commAgentID)
 	if err != nil {
-		return "", false, err
+		return "", false, nil, err
 	}
 
-	reply, err := s.commAgentLLM.GenerateReply(ctx, agent.SystemPrompt, "", userMessage)
+	// Create or retrieve session
+	var sess *ai.CommAgentSession
+	if sessionID != nil {
+		sess, err = s.commAgentSvc.GetSession(ctx, tenantID, *sessionID)
+		if err != nil {
+			return "", false, nil, err
+		}
+	} else {
+		sess, err = s.commAgentSvc.StartSession(ctx, tenantID, commAgentID, callID)
+		if err != nil {
+			return "", false, nil, err
+		}
+	}
+
+	reply, err := s.commAgentLLM.GenerateReply(ctx, agent.SystemPrompt, sess.Transcript, userMessage)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("advancedai: generate reply failed")
-		return "", false, err
+		return "", false, &sess.ID, err
 	}
 
-	shouldTransfer, reason, err := s.commAgentLLM.ShouldTransfer(ctx, agent.SystemPrompt, userMessage+"\n"+reply)
+	if err := s.commAgentSvc.AddTurn(ctx, sess, userMessage, reply, agent.MaxTurns); err != nil {
+		if err == ai.ErrSessionMaxTurns {
+			sess.Transcript += "User: " + userMessage + "\nAI: " + reply + "\n"
+			_ = s.commAgentSvc.EndSession(ctx, sess, ai.AgentSessionCompleted, "max turns reached", nil)
+			return reply, true, &sess.ID, nil
+		}
+		return "", false, &sess.ID, err
+	}
+
+	shouldTransfer, reason, err := s.commAgentLLM.ShouldTransfer(ctx, agent.SystemPrompt, sess.Transcript)
 	if err != nil {
 		s.logger.Warn().Err(err).Msg("advancedai: transfer check failed, continuing")
 		shouldTransfer = false
 	}
 	if shouldTransfer {
 		s.logger.Info().Str("reason", reason).Msg("advancedai: transfer recommended")
+		sgID := agent.TransferSkillGroupID
+		_ = s.commAgentSvc.EndSession(ctx, sess, ai.AgentSessionTransfer, reason, sgID)
 	}
 
-	return reply, shouldTransfer, nil
+	return reply, shouldTransfer, &sess.ID, nil
 }
 
 // RunConversationAnalysis executes a batch analysis task.

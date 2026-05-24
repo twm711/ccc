@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/divord97/ccc/internal/application/advancedai"
 	"github.com/divord97/ccc/internal/domain/ai"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
@@ -300,6 +301,27 @@ func ListSimulatedCalls(svc *ai.TrainingService) http.HandlerFunc {
 			return
 		}
 		response.JSON(w, 200, items)
+	}
+}
+
+// ─── ConversationAnalysis Run Handler ───
+
+func RunAnalysisTask(svc *advancedai.Service) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		tenantID := middleware.TenantIDFromCtx(r.Context())
+		taskID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+		var in struct {
+			Transcripts []string `json:"transcripts"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			response.Error(w, 400, err.Error())
+			return
+		}
+		if err := svc.RunConversationAnalysis(r.Context(), tenantID, taskID, in.Transcripts); err != nil {
+			response.Error(w, 500, err.Error())
+			return
+		}
+		response.JSON(w, 200, map[string]string{"status": "completed"})
 	}
 }
 

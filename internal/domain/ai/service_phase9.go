@@ -12,15 +12,24 @@ import (
 	"github.com/divord97/ccc/pkg/snowflake"
 )
 
+// DigitalEmployeeLLM provides LLM-based intent matching when keyword matching fails.
+type DigitalEmployeeLLM interface {
+	Correct(ctx context.Context, text string) (string, error)
+}
+
 // DigitalEmployeeService manages digital employee (AI bot) entities and scenes.
 type DigitalEmployeeService struct {
 	employees DigitalEmployeeRepository
 	scenes    DigitalEmployeeSceneRepository
+	llm       DigitalEmployeeLLM
 }
 
 func NewDigitalEmployeeService(employees DigitalEmployeeRepository, scenes DigitalEmployeeSceneRepository) *DigitalEmployeeService {
 	return &DigitalEmployeeService{employees: employees, scenes: scenes}
 }
+
+// SetLLMProvider sets an LLM provider for fallback intent matching.
+func (s *DigitalEmployeeService) SetLLMProvider(p DigitalEmployeeLLM) { s.llm = p }
 
 type CreateDigitalEmployeeInput struct {
 	TenantID    int64  `json:"tenant_id"`
@@ -133,6 +142,7 @@ type IntentConfig struct {
 }
 
 // MatchIntent checks user input against a scene's intent configuration.
+// Falls back to LLM-based matching when keyword matching fails.
 func (s *DigitalEmployeeService) MatchIntent(ctx context.Context, sceneID int64, userInput string) (*IntentMatchResult, error) {
 	scene, err := s.scenes.GetByID(ctx, sceneID)
 	if err != nil || scene == nil {
@@ -155,6 +165,29 @@ func (s *DigitalEmployeeService) MatchIntent(ctx context.Context, sceneID int64,
 					Response:   intent.Response,
 					Transfer:   intent.Transfer,
 				}, nil
+			}
+		}
+	}
+
+	// LLM fallback: ask the model to classify the user input
+	if s.llm != nil && len(intents) > 0 {
+		var names []string
+		for _, intent := range intents {
+			names = append(names, intent.Name)
+		}
+		prompt := fmt.Sprintf("User said: %q\nMatch to one of these intents: %s\nReply with the intent name only, or NONE if no match.",
+			userInput, strings.Join(names, ", "))
+		reply, err := s.llm.Correct(ctx, prompt)
+		if err == nil && reply != "" && reply != "NONE" {
+			for _, intent := range intents {
+				if containsIgnoreCase(reply, intent.Name) {
+					return &IntentMatchResult{
+						Matched:    true,
+						IntentName: intent.Name,
+						Response:   intent.Response,
+						Transfer:   intent.Transfer,
+					}, nil
+				}
 			}
 		}
 	}

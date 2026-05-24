@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 
+	"github.com/divord97/ccc/internal/application/advancedai"
 	"github.com/divord97/ccc/internal/application/agenthub"
 	"github.com/divord97/ccc/internal/application/dashboard"
 	"github.com/divord97/ccc/internal/application/imhub"
@@ -88,13 +89,18 @@ type RouterDeps struct {
 	LLMGatewayHandler    *handler.LLMGatewayHandler
 	WebRTCQualityHandler *handler.WebRTCQualityHandler
 
+	// STT/TTS
+	STTHandler *handler.STTHandler
+	TTSHandler *handler.TTSHandler
+
 	// Advanced AI
-	CommAgentSvc  *ai.CommAgentService
-	VoiceSvc      *ai.VoiceProfileService
-	AnalysisSvc   *ai.ConversationAnalysisService
-	TrainingSvc   *ai.TrainingService
-	RingSvc       *ai.RingAnalysisService
-	FullDuplexSvc *ai.FullDuplexService
+	CommAgentSvc   *ai.CommAgentService
+	VoiceSvc       *ai.VoiceProfileService
+	AnalysisSvc    *ai.ConversationAnalysisService
+	TrainingSvc    *ai.TrainingService
+	RingSvc        *ai.RingAnalysisService
+	FullDuplexSvc  *ai.FullDuplexService
+	AdvancedAISvc  *advancedai.Service
 
 	// Config
 	BreakReasonHandler      *handler.BreakReasonHandler
@@ -582,6 +588,10 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Post("/session-tag-analysis", deps.AIAnalysisHandler.BatchTags)
 		r.Post("/hotword-analysis", deps.AIAnalysisHandler.HotwordAnalysis)
 
+		// STT/TTS API endpoints
+		r.Post("/ai/stt/transcribe", deps.STTHandler.Transcribe)
+		r.Post("/ai/tts/synthesize", deps.TTSHandler.Synthesize)
+
 		r.Route("/asr-hotwords", func(r chi.Router) {
 			r.Post("/", deps.ASRHotwordsHandler.Create)
 			r.Get("/", deps.ASRHotwordsHandler.List)
@@ -649,6 +659,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/", handler.ListAnalysisTasks(deps.AnalysisSvc))
 			r.Post("/", handler.CreateAnalysisTask(deps.AnalysisSvc))
 			r.Get("/{id}", handler.GetAnalysisTask(deps.AnalysisSvc))
+			r.Post("/{id}/run", handler.RunAnalysisTask(deps.AdvancedAISvc))
 		})
 		r.Post("/ai/conversation-analytics/analyze", handler.CreateAnalysisTask(deps.AnalysisSvc))
 

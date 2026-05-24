@@ -163,14 +163,26 @@ func (h *ASRHandler) Handle(ctx context.Context, sess *Session, node routing.Flo
 	}
 
 	if sess.ESL != nil && sess.CallUUID != "" {
-		cmd := fmt.Sprintf("uuid_record %s start /tmp/asr_%d.wav %d",
-			sess.CallUUID, sess.CallID, cfg.TimeoutMs/1000)
+		audioFile := fmt.Sprintf("/tmp/asr_%d.wav", sess.CallID)
+		cmd := fmt.Sprintf("uuid_record %s start %s %d",
+			sess.CallUUID, audioFile, cfg.TimeoutMs/1000)
 		_, err := sess.ESL.SendCommand(ctx, cmd)
 		if err != nil {
 			sess.Variables["asr_result"] = ""
 			return "error", nil
 		}
-		sess.Variables["asr_audio_file"] = fmt.Sprintf("/tmp/asr_%d.wav", sess.CallID)
+		sess.Variables["asr_audio_file"] = audioFile
+
+		if sess.ASRProvider != nil {
+			text, err := sess.ASRProvider.Transcribe(ctx, audioFile)
+			if err != nil {
+				sess.Variables["asr_result"] = ""
+				sess.Variables["asr_error"] = err.Error()
+				return "error", nil
+			}
+			sess.Variables["asr_result"] = text
+			return "success", nil
+		}
 	}
 
 	sess.Variables["asr_result"] = ""

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/divord97/ccc/internal/application/advancedai"
 	"github.com/divord97/ccc/internal/application/agenthub"
 	"github.com/divord97/ccc/internal/application/aianalysis"
 	"github.com/divord97/ccc/internal/application/b2b"
@@ -274,9 +275,8 @@ func main() {
 	} else {
 		logger.Warn().Msg("ASR/TTS: NLS_APP_KEY not set, ASR/TTS disabled")
 	}
-	// Wire ASR provider into IVR engine (if available)
-	_ = asrProvider // IVR ASR handler reads audio files; actual transcription via asrProvider
-	_ = ttsProvider // IVR TTS nodes use ESL playback; ttsProvider available for API use
+	// Wire ASR provider into IVR engine for speech recognition nodes.
+	ivrEngine.SetASRProvider(asrProvider)
 
 	// --- Phase 9 Repositories ---
 	digitalEmployeeRepo := infraMySQL.NewDigitalEmployeeRepo(db)
@@ -296,6 +296,8 @@ func main() {
 
 	// Set LLM provider on QI service for LLM-type QA rules.
 	qiSvc.SetLLMProvider(llmProvider)
+	// Set LLM provider on digital employee service for fallback intent matching.
+	digitalEmployeeSvc.SetLLMProvider(llmProvider)
 
 	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
@@ -391,6 +393,10 @@ func main() {
 	llmGatewayHandler := handler.NewLLMGatewayHandler(llmGatewaySvc)
 	webrtcQualityHandler := handler.NewWebRTCQualityHandler(webrtcQualityRepo)
 
+	// STT/TTS Handlers
+	sttHandler := handler.NewSTTHandler(asrProvider)
+	ttsHandler := handler.NewTTSHandler(ttsProvider)
+
 	// Advanced AI Repositories
 	commAgentRepo := infraMySQL.NewCommAgentRepo(db)
 	commAgentSessionRepo := infraMySQL.NewCommAgentSessionRepo(db)
@@ -443,6 +449,24 @@ func main() {
 	fullDuplexSvc := ai.NewFullDuplexService(fullDuplexConfigRepo)
 	fullDuplexSvc.SetProvider(fullDuplexProv)
 
+	// Advanced AI orchestration service
+	advancedAISvc := advancedai.NewService(advancedai.Deps{
+		CommAgentSvc:  commAgentSvc,
+		VoiceSvc:      voiceProfileSvc,
+		AnalysisSvc:   conversationAnalysisSvc,
+		TrainingSvc:   trainingSvc,
+		RingSvc:       ringAnalysisSvc,
+		FullDuplexSvc: fullDuplexSvc,
+		CommAgentLLM:  commAgentProv,
+		VoiceCloneLLM: voiceCloneProv,
+		AnalyticsLLM:  convAnalyticsProv,
+		RingLLM:       ringAnalysisProv,
+		FullDuplexLLM: fullDuplexProv,
+		TrainingLLM:   trainingProv,
+		Logger:        logger,
+	})
+	// advancedAISvc is passed to router for advanced AI endpoints
+
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
 		TenantHandler:        tenantHandler,
@@ -492,12 +516,15 @@ func main() {
 		AnnotationHandler:      annotationHandler,
 		LLMGatewayHandler:      llmGatewayHandler,
 		WebRTCQualityHandler:   webrtcQualityHandler,
+		STTHandler:             sttHandler,
+		TTSHandler:             ttsHandler,
 		CommAgentSvc:           commAgentSvc,
 		VoiceSvc:               voiceProfileSvc,
 		AnalysisSvc:            conversationAnalysisSvc,
 		TrainingSvc:            trainingSvc,
 		RingSvc:                ringAnalysisSvc,
 		FullDuplexSvc:          fullDuplexSvc,
+		AdvancedAISvc:          advancedAISvc,
 		BreakReasonHandler:     breakReasonHandler,
 		DispositionCodeHandler: dispositionCodeHandler,
 		AudioFileHandler:       audioFileHandler,

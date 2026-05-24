@@ -11,9 +11,13 @@ import (
 
 // Engine interprets an IVR FlowGraph DAG node-by-node.
 type Engine struct {
-	handlers   map[routing.NodeType]NodeHandler
-	flowLoader FlowLoader
+	handlers    map[routing.NodeType]NodeHandler
+	flowLoader  FlowLoader
+	asrProvider ASRProvider
 }
+
+// SetASRProvider sets the speech recognition provider for ASR nodes.
+func (e *Engine) SetASRProvider(p ASRProvider) { e.asrProvider = p }
 
 // NodeHandler processes a single IVR node and returns the exit name to follow.
 type NodeHandler interface {
@@ -22,13 +26,19 @@ type NodeHandler interface {
 
 // Session holds per-call IVR execution state.
 type Session struct {
-	CallID    int64
-	TenantID  int64
-	FlowID    int64
-	CallUUID  string // FreeSWITCH call UUID
-	ESL       *esl.Client
-	Variables map[string]string
-	History   []NodeVisit
+	CallID      int64
+	TenantID    int64
+	FlowID      int64
+	CallUUID    string // FreeSWITCH call UUID
+	ESL         *esl.Client
+	ASRProvider ASRProvider
+	Variables   map[string]string
+	History     []NodeVisit
+}
+
+// ASRProvider transcribes audio to text.
+type ASRProvider interface {
+	Transcribe(ctx context.Context, audioURL string) (string, error)
 }
 
 type NodeVisit struct {
@@ -125,6 +135,9 @@ type FlowLoader func(ctx context.Context, flowID int64) (*routing.FlowGraph, err
 func (e *Engine) ExecuteFlow(ctx context.Context, sess *Session, flowID int64) error {
 	if e.flowLoader == nil {
 		return fmt.Errorf("ivr: no flow loader configured")
+	}
+	if sess.ASRProvider == nil && e.asrProvider != nil {
+		sess.ASRProvider = e.asrProvider
 	}
 	graph, err := e.flowLoader(ctx, flowID)
 	if err != nil {

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/divord97/ccc/pkg/snowflake"
@@ -98,6 +99,11 @@ func (s *CommAgentService) List(ctx context.Context, tenantID int64) ([]CommAgen
 
 func (s *CommAgentService) Delete(ctx context.Context, tenantID, id int64) error {
 	return s.agentRepo.Delete(ctx, tenantID, id)
+}
+
+// GetSession retrieves an existing conversation session by ID.
+func (s *CommAgentService) GetSession(ctx context.Context, tenantID, id int64) (*CommAgentSession, error) {
+	return s.sessionRepo.GetByID(ctx, tenantID, id)
 }
 
 // StartSession creates a new conversation session for the comm agent.
@@ -203,11 +209,18 @@ func (s *VoiceProfileService) List(ctx context.Context, tenantID int64) ([]Voice
 	return s.repo.List(ctx, tenantID)
 }
 
-// StartTraining transitions the profile to training state.
+// StartTraining transitions the profile to training state and submits to the provider.
 func (s *VoiceProfileService) StartTraining(ctx context.Context, tenantID, id int64) (*VoiceProfile, error) {
 	v, err := s.repo.GetByID(ctx, tenantID, id)
 	if err != nil {
 		return nil, err
+	}
+	if s.provider != nil {
+		jobID, err := s.provider.StartCloneTraining(ctx, v.SampleAudioURL)
+		if err != nil {
+			return nil, fmt.Errorf("voice clone training: %w", err)
+		}
+		v.ProviderJobID = jobID
 	}
 	v.Status = VoiceProfileTraining
 	v.UpdatedAt = time.Now()
