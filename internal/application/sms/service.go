@@ -6,16 +6,32 @@ import (
 	"fmt"
 
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/infrastructure/aliyunsms"
 	"github.com/rs/zerolog"
 )
 
+// SMSSender abstracts SMS sending for testability.
+type SMSSender interface {
+	SendSms(ctx context.Context, signName, templateID, phone string, params map[string]string) error
+}
+
 type Service struct {
 	configs integration.SmsConfigRepository
+	sender  SMSSender
 	logger  zerolog.Logger
 }
 
-func NewService(configs integration.SmsConfigRepository, logger zerolog.Logger) *Service {
-	return &Service{configs: configs, logger: logger}
+func NewService(configs integration.SmsConfigRepository, sender SMSSender, logger zerolog.Logger) *Service {
+	return &Service{configs: configs, sender: sender, logger: logger}
+}
+
+// NewServiceWithAliyun creates a Service using Aliyun SMS as the default sender.
+func NewServiceWithAliyun(configs integration.SmsConfigRepository, accessKeyID, accessKeySecret string, logger zerolog.Logger) *Service {
+	return &Service{
+		configs: configs,
+		sender:  aliyunsms.NewClient(accessKeyID, accessKeySecret),
+		logger:  logger,
+	}
 }
 
 type SendRequest struct {
@@ -58,9 +74,12 @@ func (s *Service) Send(ctx context.Context, req SendRequest) error {
 		Str("phone", req.Phone).
 		Str("template_id", templateID).
 		Str("sign", cfg.SignName).
-		Msg("sms: sending (stub)")
+		Msg("sms: sending")
 
-	// In production: integrate with Alibaba Cloud SMS SDK
-	// aliyun.SendSms(cfg.AccessKeyID, cfg.SignName, templateID, req.Phone, req.Params)
+	if err := s.sender.SendSms(ctx, cfg.SignName, templateID, req.Phone, req.Params); err != nil {
+		return fmt.Errorf("sms: send: %w", err)
+	}
+
+	s.logger.Info().Str("phone", req.Phone).Msg("sms: sent successfully")
 	return nil
 }

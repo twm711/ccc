@@ -167,7 +167,15 @@ func main() {
 	b2bSvc := b2b.NewService(callRepo, callEventRepo, nil, logger)
 	_ = callbackRepo // used via callSvc
 	emailSvc := email.NewService(imSvc, logger)
-	llmProvider := llm.NewStubProvider()
+	// LLM Provider: use DashScope when API key configured, otherwise fallback to stub.
+	var llmProvider llm.Provider
+	if cfg.Aliyun.DashScopeAPIKey != "" {
+		llmProvider = llm.NewDashScopeProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		logger.Info().Msg("LLM: using DashScope provider")
+	} else {
+		llmProvider = llm.NewStubProvider()
+		logger.Warn().Msg("LLM: DASHSCOPE_API_KEY not set, using stub provider")
+	}
 	imAssistSvc := imassist.NewService(llmProvider, logger)
 
 	// --- Phase 9 Repositories ---
@@ -185,6 +193,9 @@ func main() {
 	asrHotwordsSvc := ai.NewASRHotwordsService(asrHotwordsRepo)
 	performanceSvc := ai.NewPerformanceScorecardService(performanceScorecardRepo)
 	aiAnalysisSvc := aianalysis.NewService(llmProvider, logger)
+
+	// Set LLM provider on QI service for LLM-type QA rules.
+	qiSvc.SetLLMProvider(llmProvider)
 
 	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
@@ -266,6 +277,39 @@ func main() {
 	ringAnalysisConfigRepo := infraMySQL.NewRingAnalysisConfigRepo(db)
 	ringAnalysisLogRepo := infraMySQL.NewRingAnalysisLogRepo(db)
 	fullDuplexConfigRepo := infraMySQL.NewFullDuplexConfigRepo(db)
+
+	// Advanced AI Providers: use DashScope when API key configured, otherwise stubs.
+	var (
+		commAgentProv    llm.CommAgentProvider
+		voiceCloneProv   llm.VoiceCloningProvider
+		convAnalyticsProv llm.ConversationAnalyticsProvider
+		ringAnalysisProv  llm.RingAnalysisProvider
+		fullDuplexProv    llm.FullDuplexProvider
+		trainingProv      llm.TrainingProvider
+	)
+	if cfg.Aliyun.DashScopeAPIKey != "" {
+		commAgentProv = llm.NewDashScopeCommAgentProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		voiceCloneProv = llm.NewDashScopeVoiceCloningProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		convAnalyticsProv = llm.NewDashScopeConversationAnalyticsProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		ringAnalysisProv = llm.NewDashScopeRingAnalysisProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		fullDuplexProv = llm.NewDashScopeFullDuplexProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		trainingProv = llm.NewDashScopeTrainingProvider(cfg.Aliyun.DashScopeAPIKey, cfg.Aliyun.DashScopeModel)
+		logger.Info().Msg("Advanced AI: using DashScope providers")
+	} else {
+		commAgentProv = llm.NewStubCommAgentProvider()
+		voiceCloneProv = llm.NewStubVoiceCloningProvider()
+		convAnalyticsProv = llm.NewStubConversationAnalyticsProvider()
+		ringAnalysisProv = llm.NewStubRingAnalysisProvider()
+		fullDuplexProv = llm.NewStubFullDuplexProvider()
+		trainingProv = llm.NewStubTrainingProvider()
+		logger.Warn().Msg("Advanced AI: DASHSCOPE_API_KEY not set, using stub providers")
+	}
+	_ = commAgentProv
+	_ = voiceCloneProv
+	_ = convAnalyticsProv
+	_ = ringAnalysisProv
+	_ = fullDuplexProv
+	_ = trainingProv
 
 	// Advanced AI Domain Services
 	commAgentSvc := ai.NewCommAgentService(commAgentRepo, commAgentSessionRepo)

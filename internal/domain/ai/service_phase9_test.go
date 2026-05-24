@@ -15,12 +15,21 @@ func newTestDEService() *DigitalEmployeeService {
 	)
 }
 
+// mockQALLM is a test LLM provider that returns fixed scores.
+type mockQALLM struct{}
+
+func (m *mockQALLM) QAInspectLLM(_ context.Context, _, _ string) (float64, string, error) {
+	return 80, "LLM inspection passed (mock)", nil
+}
+
 func newTestQIService() *QualityInspectionService {
-	return NewQualityInspectionService(
+	svc := NewQualityInspectionService(
 		NewMockQARuleRepo(),
 		NewMockQASchemeRepo(),
 		NewMockQAResultRepo(),
 	)
+	svc.SetLLMProvider(&mockQALLM{})
+	return svc
 }
 
 // --- Digital Employee Tests ---

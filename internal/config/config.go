@@ -6,11 +6,12 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	JWT      JWTConfig
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Redis     RedisConfig
+	JWT       JWTConfig
 	Snowflake SnowflakeConfig
+	Aliyun    AliyunConfig
 }
 
 type ServerConfig struct {
@@ -28,12 +29,20 @@ type RedisConfig struct {
 }
 
 type JWTConfig struct {
-	Secret   string
-	Issuer   string
+	Secret string
+	Issuer string
 }
 
 type SnowflakeConfig struct {
 	NodeID int64
+}
+
+type AliyunConfig struct {
+	AccessKeyID     string
+	AccessKeySecret string
+	NLSAppKey       string
+	DashScopeAPIKey string
+	DashScopeModel  string
 }
 
 func Load() *Config {
@@ -55,6 +64,13 @@ func Load() *Config {
 		},
 		Snowflake: SnowflakeConfig{
 			NodeID: int64(envOrInt("SNOWFLAKE_NODE_ID", 1)),
+		},
+		Aliyun: AliyunConfig{
+			AccessKeyID:     envOr("ALIYUN_ACCESS_KEY_ID", ""),
+			AccessKeySecret: envOr("ALIYUN_ACCESS_KEY_SECRET", ""),
+			NLSAppKey:       envOr("ALIYUN_NLS_APP_KEY", ""),
+			DashScopeAPIKey: envOr("DASHSCOPE_API_KEY", ""),
+			DashScopeModel:  envOr("DASHSCOPE_MODEL", "qwen-plus"),
 		},
 	}
 }
