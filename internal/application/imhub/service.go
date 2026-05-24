@@ -1,11 +1,13 @@
 package imhub
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/divord97/ccc/internal/domain/im"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -32,16 +34,23 @@ type Client struct {
 
 // Hub manages WebSocket connections for IM real-time messaging.
 type Hub struct {
+	imSvc   *im.IMService
 	logger  zerolog.Logger
 	mu      sync.RWMutex
 	clients map[int64]map[*Client]bool // sessionID -> clients
 }
 
-func NewHub(logger zerolog.Logger) *Hub {
+func NewHub(imSvc *im.IMService, logger zerolog.Logger) *Hub {
 	return &Hub{
+		imSvc:   imSvc,
 		logger:  logger,
 		clients: make(map[int64]map[*Client]bool),
 	}
+}
+
+// StartBroadcast keeps the hub alive; IM events are push-driven via Broadcast().
+func (h *Hub) StartBroadcast(ctx context.Context) {
+	<-ctx.Done()
 }
 
 func (h *Hub) Register(c *Client) {
@@ -105,15 +114,28 @@ func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
 	client := &Client{ID: clientID, SessionID: sessionID, Send: make(chan []byte, 256)}
 	h.Register(client)
 
-	// Writer goroutine
+	// Writer goroutine (sends messages + ping)
 	go func() {
+		ticker := time.NewTicker(30 * time.Second)
 		defer func() {
+			ticker.Stop()
 			conn.Close()
 			h.Unregister(client)
 		}()
-		for msg := range client.Send {
-			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				return
+		for {
+			select {
+			case msg, ok := <-client.Send:
+				if !ok {
+					conn.WriteMessage(websocket.CloseMessage, nil)
+					return
+				}
+				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+					return
+				}
+			case <-ticker.C:
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
 			}
 		}
 	}()

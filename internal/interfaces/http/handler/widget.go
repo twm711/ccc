@@ -32,6 +32,21 @@ func (h *WidgetHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusCreated, sess)
 }
 
+func (h *WidgetHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = 50
+	}
+	items, err := h.svc.ListMessages(r.Context(), id, offset, limit)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]interface{}{"items": items})
+}
+
 func (h *WidgetHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	var in struct {

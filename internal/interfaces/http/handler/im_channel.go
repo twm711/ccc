@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/im"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -38,7 +39,7 @@ func (h *IMChannelHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *IMChannelHandler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	items, err := h.svc.ListChannels(r.Context(), tenantID)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())

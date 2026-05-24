@@ -7,6 +7,7 @@ import (
 
 	"github.com/divord97/ccc/internal/application/export"
 	"github.com/divord97/ccc/internal/domain/report"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 )
 
@@ -19,7 +20,7 @@ func NewReportHandler(svc *report.ReportService) *ReportHandler {
 }
 
 func parseReportFilter(r *http.Request) report.ReportFilter {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {

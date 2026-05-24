@@ -467,6 +467,34 @@ func (h *CallTagDefHandler) Get(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, ct)
 }
 
+func (h *CallTagDefHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var req struct {
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	ct, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		response.Error(w, http.StatusNotFound, "not found")
+		return
+	}
+	if req.Name != "" {
+		ct.Name = req.Name
+	}
+	if req.Color != "" {
+		ct.Color = req.Color
+	}
+	if err := h.repo.Update(r.Context(), ct); err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, ct)
+}
+
 func (h *CallTagDefHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err := h.repo.Delete(r.Context(), id); err != nil {

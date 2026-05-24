@@ -7,6 +7,7 @@ import (
 
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/domain/campaign"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -48,7 +49,7 @@ func (h *CampaignHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CampaignHandler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {

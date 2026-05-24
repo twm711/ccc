@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/ticket"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -38,7 +39,7 @@ func (h *TicketHandler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TicketHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	items, err := h.tmplSvc.ListCategories(r.Context(), tenantID)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
@@ -62,13 +63,23 @@ func (h *TicketHandler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TicketHandler) ListTemplates(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	items, err := h.tmplSvc.ListTemplates(r.Context(), tenantID)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]interface{}{"items": items})
+}
+
+func (h *TicketHandler) GetTemplate(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	t, err := h.tmplSvc.GetTemplate(r.Context(), id)
+	if err != nil {
+		response.Error(w, http.StatusNotFound, "template not found")
+		return
+	}
+	response.JSON(w, http.StatusOK, t)
 }
 
 func (h *TicketHandler) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
@@ -139,7 +150,7 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *TicketHandler) ListTickets(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {

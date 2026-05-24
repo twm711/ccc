@@ -3,9 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/identity"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 )
 
@@ -18,7 +18,7 @@ func NewProfileHandler(userSvc *identity.UserService) *ProfileHandler {
 }
 
 func (h *ProfileHandler) Overview(w http.ResponseWriter, r *http.Request) {
-	userID, _ := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
+	userID := middleware.UserIDFromCtx(r.Context())
 	u, err := h.userSvc.GetByID(r.Context(), userID)
 	if err != nil {
 		response.Error(w, http.StatusNotFound, "user not found")
@@ -28,7 +28,7 @@ func (h *ProfileHandler) Overview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProfileHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
-	userID, _ := strconv.ParseInt(r.URL.Query().Get("user_id"), 10, 64)
+	userID := middleware.UserIDFromCtx(r.Context())
 	var in struct {
 		DisplayName string `json:"display_name"`
 	}

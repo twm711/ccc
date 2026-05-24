@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/im"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -63,7 +64,7 @@ func (h *SocialChannelHandler) UpdateConfig(w http.ResponseWriter, r *http.Reque
 
 // ListConfigs lists all social channel configs for the tenant.
 func (h *SocialChannelHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	if tenantID == 0 {
 		response.Error(w, 400, "tenant_id is required")
 		return

@@ -84,6 +84,7 @@ func ValidMediaType(mt MediaType) bool {
 
 type Call struct {
 	ID                  int64           `db:"id" json:"id"`
+	ChannelUUID         string          `db:"channel_uuid" json:"channel_uuid,omitempty"`
 	TenantID            int64           `db:"tenant_id" json:"tenant_id"`
 	Direction           CallDirection   `db:"direction" json:"direction"`
 	CallType            CallType        `db:"call_type" json:"call_type"`

@@ -30,5 +30,6 @@ type CallTagRepository interface {
 	Create(ctx context.Context, ct *CallTag) error
 	GetByID(ctx context.Context, id int64) (*CallTag, error)
 	List(ctx context.Context, tenantID int64) ([]*CallTag, error)
+	Update(ctx context.Context, ct *CallTag) error
 	Delete(ctx context.Context, id int64) error
 }

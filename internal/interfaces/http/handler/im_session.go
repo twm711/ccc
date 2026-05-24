@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/im"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -19,7 +20,7 @@ func NewIMSessionHandler(svc *im.IMService) *IMSessionHandler {
 }
 
 func (h *IMSessionHandler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {

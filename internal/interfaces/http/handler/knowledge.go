@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/ai"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -36,7 +37,7 @@ func (h *KnowledgeHandler) CreateCategory(w http.ResponseWriter, r *http.Request
 }
 
 func (h *KnowledgeHandler) ListCategories(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	items, err := h.svc.ListCategories(r.Context(), tenantID)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
@@ -60,7 +61,7 @@ func (h *KnowledgeHandler) CreateArticle(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *KnowledgeHandler) ListArticles(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
@@ -122,7 +123,7 @@ func (h *KnowledgeHandler) UpdateArticle(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *KnowledgeHandler) Search(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	q := r.URL.Query().Get("q")
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {

@@ -123,6 +123,13 @@ func (r *CallTagDefRepo) List(ctx context.Context, tenantID int64) ([]*configura
 	return items, err
 }
 
+func (r *CallTagDefRepo) Update(ctx context.Context, ct *configuration.CallTag) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE call_tag_definitions SET name=?, color=? WHERE id=?`,
+		ct.Name, ct.Color, ct.ID)
+	return err
+}
+
 func (r *CallTagDefRepo) Delete(ctx context.Context, id int64) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM call_tag_definitions WHERE id = ?`, id)
 	return err
