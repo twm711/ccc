@@ -204,15 +204,29 @@ func main() {
 	}
 	imAssistSvc := imassist.NewService(llmProvider, logger)
 
-	// ASR/TTS Providers: use Aliyun NLS when credentials configured.
+	// ASR/TTS Providers: use Aliyun NLS when appkey configured.
 	var asrProvider llm.ASRProvider
 	var ttsProvider llm.TTSProvider
-	if cfg.Aliyun.AccessKeyID != "" && cfg.Aliyun.NLSAppKey != "" {
-		asrProvider = llm.NewAliyunASRProvider(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret, cfg.Aliyun.NLSAppKey)
-		ttsProvider = llm.NewAliyunTTSProvider(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret, cfg.Aliyun.NLSAppKey)
-		logger.Info().Msg("ASR/TTS: using Aliyun NLS providers")
+	if cfg.Aliyun.NLSAppKey != "" {
+		nlsToken := cfg.Aliyun.NLSToken
+		if nlsToken == "" && cfg.Aliyun.AccessKeyID != "" {
+			t, _, err := llm.FetchNLSToken(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret)
+			if err != nil {
+				logger.Error().Err(err).Msg("ASR/TTS: failed to fetch NLS token")
+			} else {
+				nlsToken = t
+				logger.Info().Msg("ASR/TTS: NLS token obtained via AccessKey")
+			}
+		}
+		if nlsToken != "" {
+			asrProvider = llm.NewAliyunASRProvider(nlsToken, cfg.Aliyun.NLSAppKey, cfg.Aliyun.STTRegion)
+			ttsProvider = llm.NewAliyunTTSProvider(nlsToken, cfg.Aliyun.NLSAppKey, cfg.Aliyun.STTRegion, cfg.Aliyun.TTSVoice, cfg.Aliyun.TTSSampleRate)
+			logger.Info().Str("appkey", cfg.Aliyun.NLSAppKey).Str("region", cfg.Aliyun.STTRegion).Msg("ASR/TTS: using Aliyun NLS providers")
+		} else {
+			logger.Warn().Msg("ASR/TTS: no NLS token available, ASR/TTS disabled")
+		}
 	} else {
-		logger.Warn().Msg("ASR/TTS: ALIYUN_ACCESS_KEY_ID or ALIYUN_NLS_APP_KEY not set, ASR/TTS disabled")
+		logger.Warn().Msg("ASR/TTS: NLS_APP_KEY not set, ASR/TTS disabled")
 	}
 	_ = asrProvider
 	_ = ttsProvider

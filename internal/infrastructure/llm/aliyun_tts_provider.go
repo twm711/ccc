@@ -10,50 +10,58 @@ import (
 	"time"
 )
 
-// AliyunTTSProvider implements TTSProvider using Aliyun NLS text-to-speech.
+// AliyunTTSProvider implements TTSProvider using Aliyun NLS REST API.
 type AliyunTTSProvider struct {
-	accessKeyID     string
-	accessKeySecret string
-	appKey          string
-	client          *http.Client
+	token      string
+	appKey     string
+	region     string
+	voice      string
+	sampleRate int
+	client     *http.Client
 }
 
-func NewAliyunTTSProvider(accessKeyID, accessKeySecret, appKey string) *AliyunTTSProvider {
+func NewAliyunTTSProvider(token, appKey, region, voice string, sampleRate int) *AliyunTTSProvider {
+	if region == "" {
+		region = "cn-shanghai"
+	}
+	if voice == "" {
+		voice = "zhixiaoxia"
+	}
+	if sampleRate == 0 {
+		sampleRate = 16000
+	}
 	return &AliyunTTSProvider{
-		accessKeyID:     accessKeyID,
-		accessKeySecret: accessKeySecret,
-		appKey:          appKey,
-		client:          &http.Client{Timeout: 30 * time.Second},
+		token:      token,
+		appKey:     appKey,
+		region:     region,
+		voice:      voice,
+		sampleRate: sampleRate,
+		client:     &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
 // Synthesize converts text to speech audio bytes using Aliyun NLS REST API.
 func (p *AliyunTTSProvider) Synthesize(ctx context.Context, text string, voice string) ([]byte, error) {
-	token, err := p.getToken(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("tts: get token: %w", err)
-	}
-
 	if voice == "" {
-		voice = "xiaoyun"
+		voice = p.voice
 	}
 
 	reqBody := map[string]interface{}{
 		"appkey":      p.appKey,
 		"text":        text,
 		"format":      "wav",
-		"sample_rate": 16000,
+		"sample_rate": p.sampleRate,
 		"voice":       voice,
 	}
 	body, _ := json.Marshal(reqBody)
 
-	ttsURL := "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/tts"
+	ttsURL := fmt.Sprintf("https://nls-gateway-%s.aliyuncs.com/stream/v1/tts", p.region)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ttsURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("tts: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-NLS-Token", token)
+	req.Header.Set("X-NLS-Token", p.token)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -78,39 +86,4 @@ func (p *AliyunTTSProvider) Synthesize(ctx context.Context, text string, voice s
 	}
 
 	return respBody, nil
-}
-
-func (p *AliyunTTSProvider) getToken(ctx context.Context) (string, error) {
-	tokenURL := "https://nls-meta.cn-shanghai.aliyuncs.com/pop/2018-05-18/tokens"
-	reqBody := map[string]string{
-		"AccessKeyId":     p.accessKeyID,
-		"AccessKeySecret": p.accessKeySecret,
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := p.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-
-	var tokenResp nlsTokenResponse
-	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
-		return "", fmt.Errorf("tts: parse token: %w", err)
-	}
-	if tokenResp.Token.ID == "" {
-		return "", fmt.Errorf("tts: empty token: %s", tokenResp.ErrMsg)
-	}
-	return tokenResp.Token.ID, nil
 }
