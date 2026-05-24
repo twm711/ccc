@@ -3,8 +3,11 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/divord97/ccc/pkg/snowflake"
 )
@@ -164,15 +167,26 @@ func containsIgnoreCase(s, substr string) bool {
 	return len(substr) > 0 && strings.Contains(strings.ToLower(s), strings.ToLower(substr))
 }
 
+// QALLMProvider is an optional LLM interface for LLM-type QA rules.
+type QALLMProvider interface {
+	QAInspectLLM(ctx context.Context, transcript, prompt string) (float64, string, error)
+}
+
 // QualityInspectionService manages QA rules, schemes, and results.
 type QualityInspectionService struct {
 	rules   QARuleRepository
 	schemes QASchemeRepository
 	results QAResultRepository
+	llm     QALLMProvider
 }
 
 func NewQualityInspectionService(rules QARuleRepository, schemes QASchemeRepository, results QAResultRepository) *QualityInspectionService {
 	return &QualityInspectionService{rules: rules, schemes: schemes, results: results}
+}
+
+// SetLLMProvider sets an LLM provider for LLM-type QA rules.
+func (s *QualityInspectionService) SetLLMProvider(p QALLMProvider) {
+	s.llm = p
 }
 
 type CreateQARuleInput struct {
@@ -317,7 +331,7 @@ func (s *QualityInspectionService) RunInspection(ctx context.Context, tenantID, 
 		if !ok {
 			continue
 		}
-		rr := evaluateRule(rule, transcript)
+		rr := evaluateRule(ctx, rule, transcript, s.llm)
 		ruleResults = append(ruleResults, rr)
 		totalScore += rr.Score * w.Weight
 		totalWeight += w.Weight
@@ -349,7 +363,7 @@ func (s *QualityInspectionService) RunInspection(ctx context.Context, tenantID, 
 }
 
 // evaluateRule evaluates a single QA rule against a transcript.
-func evaluateRule(rule *QARule, transcript string) QARuleResult {
+func evaluateRule(ctx context.Context, rule *QARule, transcript string, llm QALLMProvider) QARuleResult {
 	rr := QARuleResult{
 		RuleID:   rule.ID,
 		RuleName: rule.Name,
@@ -358,23 +372,31 @@ func evaluateRule(rule *QARule, transcript string) QARuleResult {
 
 	switch rule.Type {
 	case QARuleTypeKeyword:
-		rr = evaluateKeywordRule(rule, transcript)
+		return evaluateKeywordRule(rule, transcript)
+	case QARuleTypeRegex:
+		return evaluateRegexRule(rule, transcript)
 	case QARuleTypeSilence:
-		rr.Passed = true
-		rr.Score = 100
-		rr.Detail = "silence check passed (stub)"
+		return evaluateSilenceRule(rule, transcript)
 	case QARuleTypeSpeed:
-		rr.Passed = true
-		rr.Score = 100
-		rr.Detail = "speed check passed (stub)"
+		return evaluateSpeedRule(rule, transcript)
+	case QARuleTypeInterruption:
+		return evaluateInterruptionRule(rule, transcript)
+	case QARuleTypeEnergy:
+		return evaluateEnergyRule(rule, transcript)
+	case QARuleTypeDuration:
+		return evaluateDurationRule(rule, transcript)
+	case QARuleTypeEntity:
+		return evaluateEntityRule(rule, transcript)
+	case QARuleTypeRole:
+		return evaluateRoleRule(rule, transcript)
+	case QARuleTypeAbnormalHangup:
+		return evaluateAbnormalHangupRule(rule, transcript)
 	case QARuleTypeLLM:
-		rr.Passed = true
-		rr.Score = 80
-		rr.Detail = "LLM analysis passed (stub)"
+		return evaluateLLMRule(ctx, rule, transcript, llm)
 	default:
 		rr.Passed = true
 		rr.Score = 100
-		rr.Detail = "rule check passed (stub)"
+		rr.Detail = "unknown rule type, passed by default"
 	}
 	return rr
 }
@@ -425,6 +447,447 @@ func evaluateKeywordRule(rule *QARule, transcript string) QARuleResult {
 		rr.Score = 100
 		rr.Detail = "no forbidden keywords found"
 	}
+	return rr
+}
+
+// RegexRuleConfig represents the JSON config for a regex rule.
+type RegexRuleConfig struct {
+	Pattern string `json:"pattern"`
+	Require string `json:"require"` // "match" or "no_match"
+}
+
+func evaluateRegexRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg RegexRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid regex config"
+		return rr
+	}
+
+	re, err := regexp.Compile(cfg.Pattern)
+	if err != nil {
+		rr.Detail = "invalid regex pattern: " + err.Error()
+		return rr
+	}
+
+	matched := re.MatchString(transcript)
+	if cfg.Require == "no_match" {
+		rr.Passed = !matched
+		if rr.Passed {
+			rr.Score = 100
+			rr.Detail = "pattern correctly absent"
+		} else {
+			rr.Detail = "forbidden pattern matched: " + re.FindString(transcript)
+		}
+	} else {
+		rr.Passed = matched
+		if rr.Passed {
+			rr.Score = 100
+			rr.Detail = "required pattern matched"
+		} else {
+			rr.Detail = "required pattern not found"
+		}
+	}
+	return rr
+}
+
+// SilenceRuleConfig specifies silence detection thresholds.
+// The transcript is expected to contain metadata markers like [silence:5.2s].
+type SilenceRuleConfig struct {
+	MaxSilenceSec float64 `json:"max_silence_sec"`
+}
+
+func evaluateSilenceRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg SilenceRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid silence config"
+		return rr
+	}
+	if cfg.MaxSilenceSec <= 0 {
+		cfg.MaxSilenceSec = 5.0
+	}
+
+	// Parse [silence:Xs] markers from transcript metadata.
+	re := regexp.MustCompile(`\[silence:([\d.]+)s\]`)
+	matches := re.FindAllStringSubmatch(transcript, -1)
+	var maxFound float64
+	for _, m := range matches {
+		var dur float64
+		if _, err := fmt.Sscanf(m[1], "%f", &dur); err == nil && dur > maxFound {
+			maxFound = dur
+		}
+	}
+
+	if maxFound > cfg.MaxSilenceSec {
+		rr.Detail = fmt.Sprintf("long silence detected: %.1fs (max: %.1fs)", maxFound, cfg.MaxSilenceSec)
+	} else {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = fmt.Sprintf("no excessive silence (max found: %.1fs, limit: %.1fs)", maxFound, cfg.MaxSilenceSec)
+	}
+	return rr
+}
+
+// SpeedRuleConfig specifies speaking speed thresholds.
+// The transcript is expected to contain metadata like [speed:180wpm] or uses word count / duration.
+type SpeedRuleConfig struct {
+	MinWordsPerMin float64 `json:"min_words_per_min"`
+	MaxWordsPerMin float64 `json:"max_words_per_min"`
+}
+
+func evaluateSpeedRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg SpeedRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid speed config"
+		return rr
+	}
+
+	// Try to parse [speed:Xwpm] marker.
+	re := regexp.MustCompile(`\[speed:([\d.]+)wpm\]`)
+	var speed float64
+	var hasSpeed bool
+	if m := re.FindStringSubmatch(transcript); len(m) > 1 {
+		fmt.Sscanf(m[1], "%f", &speed)
+		hasSpeed = true
+	} else {
+		// Try to compute from character count and [duration:Xs] marker.
+		durRe := regexp.MustCompile(`\[duration:([\d.]+)s\]`)
+		if dm := durRe.FindStringSubmatch(transcript); len(dm) > 1 {
+			var durSec float64
+			fmt.Sscanf(dm[1], "%f", &durSec)
+			if durSec > 0 {
+				charCount := utf8.RuneCountInString(transcript)
+				speed = float64(charCount) / (durSec / 60)
+				hasSpeed = true
+			}
+		}
+	}
+
+	if !hasSpeed {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = "no speed or duration metadata available, skipped"
+		return rr
+	}
+
+	if cfg.MaxWordsPerMin > 0 && speed > cfg.MaxWordsPerMin {
+		rr.Detail = fmt.Sprintf("speaking too fast: %.0f wpm (max: %.0f)", speed, cfg.MaxWordsPerMin)
+	} else if cfg.MinWordsPerMin > 0 && speed < cfg.MinWordsPerMin {
+		rr.Detail = fmt.Sprintf("speaking too slow: %.0f wpm (min: %.0f)", speed, cfg.MinWordsPerMin)
+	} else {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = fmt.Sprintf("speaking speed normal: %.0f wpm", speed)
+	}
+	return rr
+}
+
+// InterruptionRuleConfig specifies interruption detection.
+// Expects [interruption] markers in transcript.
+type InterruptionRuleConfig struct {
+	MaxInterruptions int `json:"max_interruptions"`
+}
+
+func evaluateInterruptionRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg InterruptionRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid interruption config"
+		return rr
+	}
+	if cfg.MaxInterruptions <= 0 {
+		cfg.MaxInterruptions = 3
+	}
+
+	count := strings.Count(transcript, "[interruption]")
+	if count > cfg.MaxInterruptions {
+		rr.Detail = fmt.Sprintf("too many interruptions: %d (max: %d)", count, cfg.MaxInterruptions)
+	} else {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = fmt.Sprintf("interruptions within limit: %d (max: %d)", count, cfg.MaxInterruptions)
+	}
+	return rr
+}
+
+// EnergyRuleConfig specifies volume/energy thresholds.
+// Expects [energy:X] markers in transcript (0-100 scale).
+type EnergyRuleConfig struct {
+	MinEnergy float64 `json:"min_energy"`
+	MaxEnergy float64 `json:"max_energy"`
+}
+
+func evaluateEnergyRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg EnergyRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid energy config"
+		return rr
+	}
+
+	re := regexp.MustCompile(`\[energy:([\d.]+)\]`)
+	matches := re.FindAllStringSubmatch(transcript, -1)
+	if len(matches) == 0 {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = "no energy data available, passed by default"
+		return rr
+	}
+
+	var total, maxE float64
+	for _, m := range matches {
+		var e float64
+		fmt.Sscanf(m[1], "%f", &e)
+		total += e
+		if e > maxE {
+			maxE = e
+		}
+	}
+	avg := total / float64(len(matches))
+
+	if cfg.MaxEnergy > 0 && maxE > cfg.MaxEnergy {
+		rr.Detail = fmt.Sprintf("peak volume too high: %.0f (max: %.0f)", maxE, cfg.MaxEnergy)
+	} else if cfg.MinEnergy > 0 && avg < cfg.MinEnergy {
+		rr.Detail = fmt.Sprintf("average volume too low: %.0f (min: %.0f)", avg, cfg.MinEnergy)
+	} else {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = fmt.Sprintf("volume normal (avg: %.0f, peak: %.0f)", avg, maxE)
+	}
+	return rr
+}
+
+// DurationRuleConfig specifies call duration thresholds in seconds.
+// Expects [duration:Xs] marker in transcript.
+type DurationRuleConfig struct {
+	MinDurationSec float64 `json:"min_duration_sec"`
+	MaxDurationSec float64 `json:"max_duration_sec"`
+}
+
+func evaluateDurationRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg DurationRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid duration config"
+		return rr
+	}
+
+	re := regexp.MustCompile(`\[duration:([\d.]+)s\]`)
+	var duration float64
+	if m := re.FindStringSubmatch(transcript); len(m) > 1 {
+		fmt.Sscanf(m[1], "%f", &duration)
+	}
+
+	if cfg.MaxDurationSec > 0 && duration > cfg.MaxDurationSec {
+		rr.Detail = fmt.Sprintf("call too long: %.0fs (max: %.0fs)", duration, cfg.MaxDurationSec)
+	} else if cfg.MinDurationSec > 0 && duration < cfg.MinDurationSec {
+		rr.Detail = fmt.Sprintf("call too short: %.0fs (min: %.0fs)", duration, cfg.MinDurationSec)
+	} else {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = fmt.Sprintf("call duration normal: %.0fs", duration)
+	}
+	return rr
+}
+
+// EntityRuleConfig specifies required named entities in the transcript.
+type EntityRuleConfig struct {
+	Entities []string `json:"entities"` // e.g. ["order_number", "phone", "name"]
+	Require  string   `json:"require"`  // "all" or "any"
+}
+
+func evaluateEntityRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg EntityRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid entity config"
+		return rr
+	}
+
+	entityPatterns := map[string]*regexp.Regexp{
+		"phone":        regexp.MustCompile(`1[3-9]\d{9}`),
+		"email":        regexp.MustCompile(`[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}`),
+		"order_number": regexp.MustCompile(`(?i)(订单|order)\s*[号:：#]?\s*[A-Z0-9]{6,}`),
+		"id_card":      regexp.MustCompile(`\d{17}[\dXx]`),
+		"name":         regexp.MustCompile(`(?:我叫|姓名[是：:]\s*|先生|女士|您好\s*)[\p{Han}]{2,4}`),
+	}
+
+	var found, missing []string
+	for _, entity := range cfg.Entities {
+		pat, ok := entityPatterns[entity]
+		if !ok {
+			// Treat unknown entity as keyword search.
+			if containsIgnoreCase(transcript, entity) {
+				found = append(found, entity)
+			} else {
+				missing = append(missing, entity)
+			}
+			continue
+		}
+		if pat.MatchString(transcript) {
+			found = append(found, entity)
+		} else {
+			missing = append(missing, entity)
+		}
+	}
+
+	requireAll := cfg.Require != "any"
+	if requireAll {
+		rr.Passed = len(missing) == 0
+	} else {
+		rr.Passed = len(found) > 0
+	}
+
+	if rr.Passed {
+		rr.Score = 100
+		rr.Detail = fmt.Sprintf("entities found: %s", strings.Join(found, ", "))
+	} else {
+		rr.Detail = fmt.Sprintf("entities missing: %s", strings.Join(missing, ", "))
+	}
+	return rr
+}
+
+// RoleRuleConfig checks if agent followed specific role-based requirements.
+type RoleRuleConfig struct {
+	RequireGreeting bool     `json:"require_greeting"`
+	RequireClosing  bool     `json:"require_closing"`
+	RequiredPhrases []string `json:"required_phrases"`
+}
+
+func evaluateRoleRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg RoleRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid role config"
+		return rr
+	}
+
+	var issues []string
+
+	if cfg.RequireGreeting {
+		greetingPatterns := []string{"您好", "你好", "欢迎", "感谢来电", "感谢致电"}
+		hasGreeting := false
+		for _, g := range greetingPatterns {
+			if containsIgnoreCase(transcript, g) {
+				hasGreeting = true
+				break
+			}
+		}
+		if !hasGreeting {
+			issues = append(issues, "missing greeting")
+		}
+	}
+
+	if cfg.RequireClosing {
+		closingPatterns := []string{"再见", "再会", "感谢", "祝您", "还有什么"}
+		hasClosure := false
+		for _, c := range closingPatterns {
+			if containsIgnoreCase(transcript, c) {
+				hasClosure = true
+				break
+			}
+		}
+		if !hasClosure {
+			issues = append(issues, "missing closing")
+		}
+	}
+
+	for _, phrase := range cfg.RequiredPhrases {
+		if !containsIgnoreCase(transcript, phrase) {
+			issues = append(issues, "missing phrase: "+phrase)
+		}
+	}
+
+	if len(issues) == 0 {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = "all role requirements met"
+	} else {
+		rr.Detail = strings.Join(issues, "; ")
+	}
+	return rr
+}
+
+// AbnormalHangupRuleConfig checks for abnormal call termination.
+// Expects [hangup:abnormal] or [hangup:normal] marker.
+type AbnormalHangupRuleConfig struct {
+	CheckMarker bool `json:"check_marker"`
+}
+
+func evaluateAbnormalHangupRule(rule *QARule, transcript string) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	if strings.Contains(transcript, "[hangup:abnormal]") {
+		rr.Detail = "abnormal hangup detected"
+		return rr
+	}
+
+	// Heuristic: if the call ends abruptly without closing phrases, flag it.
+	closingPatterns := []string{"再见", "再会", "拜拜", "结束", "挂了"}
+	lines := strings.Split(transcript, "\n")
+	if len(lines) > 0 {
+		lastLine := lines[len(lines)-1]
+		for _, c := range closingPatterns {
+			if containsIgnoreCase(lastLine, c) {
+				rr.Passed = true
+				rr.Score = 100
+				rr.Detail = "normal hangup detected"
+				return rr
+			}
+		}
+	}
+
+	// No closing marker, no explicit closing phrase — default to pass with note.
+	rr.Passed = true
+	rr.Score = 80
+	rr.Detail = "no abnormal hangup marker, but closing phrase not found"
+	return rr
+}
+
+// LLMRuleConfig specifies LLM-based inspection parameters.
+type LLMRuleConfig struct {
+	Prompt       string  `json:"prompt"`
+	PassThreshold float64 `json:"pass_threshold"`
+}
+
+func evaluateLLMRule(ctx context.Context, rule *QARule, transcript string, llm QALLMProvider) QARuleResult {
+	rr := QARuleResult{RuleID: rule.ID, RuleName: rule.Name, RuleType: rule.Type}
+
+	var cfg LLMRuleConfig
+	if err := json.Unmarshal([]byte(rule.Config), &cfg); err != nil {
+		rr.Detail = "invalid LLM rule config"
+		return rr
+	}
+	if cfg.PassThreshold <= 0 {
+		cfg.PassThreshold = 60
+	}
+
+	if llm == nil {
+		rr.Passed = true
+		rr.Score = 100
+		rr.Detail = "LLM provider not configured, skipped"
+		return rr
+	}
+
+	score, detail, err := llm.QAInspectLLM(ctx, transcript, cfg.Prompt)
+	if err != nil {
+		rr.Detail = "LLM inspection error: " + err.Error()
+		return rr
+	}
+
+	rr.Score = score
+	rr.Passed = score >= cfg.PassThreshold
+	rr.Detail = detail
 	return rr
 }
 
