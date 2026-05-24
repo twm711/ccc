@@ -114,6 +114,12 @@ func (c *Client) Acquire(ctx context.Context) (*conn, error) {
 }
 
 func (c *Client) Release(cn *conn) {
+	if atomic.LoadInt32(&c.closed) == 1 {
+		if cn.tcpConn != nil {
+			cn.tcpConn.Close()
+		}
+		return
+	}
 	c.pool <- cn
 }
 
