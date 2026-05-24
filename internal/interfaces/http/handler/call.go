@@ -9,6 +9,7 @@ import (
 	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -24,7 +25,7 @@ func NewCallHandler(callSvc *call.CallService, outboundSvc *outbound.Service, ta
 }
 
 func (h *CallHandler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
@@ -102,7 +103,7 @@ func (h *CallHandler) GetIVRTracking(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CallHandler) Dial(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var input struct {
 		AgentUserID int64  `json:"agent_user_id"`
 		Callee      string `json:"callee"`
@@ -129,7 +130,7 @@ func (h *CallHandler) Dial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CallHandler) InternalDial(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var input struct {
 		CallerAgentID int64  `json:"caller_agent_id"`
 		CalleeAgentID int64  `json:"callee_agent_id"`
@@ -158,7 +159,7 @@ func (h *CallHandler) InternalDial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CallHandler) AddTag(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	callID, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 
 	var input struct {

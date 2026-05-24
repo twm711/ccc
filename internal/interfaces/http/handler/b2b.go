@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/divord97/ccc/internal/application/b2b"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 )
 
@@ -17,8 +18,8 @@ func NewB2BHandler(svc *b2b.Service) *B2BHandler {
 }
 
 func (h *B2BHandler) Back2BackCall(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var in struct {
-		TenantID     int64  `json:"tenant_id"`
 		CallerNumber string `json:"caller_number"`
 		CalleeNumber string `json:"callee_number"`
 		Gateway      string `json:"gateway"`
@@ -28,7 +29,7 @@ func (h *B2BHandler) Back2BackCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.svc.Back2BackCall(r.Context(), in.TenantID, in.CallerNumber, in.CalleeNumber, in.Gateway)
+	c, err := h.svc.Back2BackCall(r.Context(), tenantID, in.CallerNumber, in.CalleeNumber, in.Gateway)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -37,8 +38,8 @@ func (h *B2BHandler) Back2BackCall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *B2BHandler) FlashSMS(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var in struct {
-		TenantID    int64  `json:"tenant_id"`
 		PhoneNumber string `json:"phone_number"`
 		Message     string `json:"message"`
 	}
@@ -47,7 +48,7 @@ func (h *B2BHandler) FlashSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.FlashSMS(r.Context(), in.TenantID, in.PhoneNumber, in.Message); err != nil {
+	if err := h.svc.FlashSMS(r.Context(), tenantID, in.PhoneNumber, in.Message); err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -55,8 +56,8 @@ func (h *B2BHandler) FlashSMS(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *B2BHandler) EncryptedCall(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var in struct {
-		TenantID           int64  `json:"tenant_id"`
 		CallerNumber       string `json:"caller_number"`
 		CalleeNumber       string `json:"callee_number"`
 		IntermediateNumber string `json:"intermediate_number"`
@@ -66,7 +67,7 @@ func (h *B2BHandler) EncryptedCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, err := h.svc.EncryptedCall(r.Context(), in.TenantID, in.CallerNumber, in.CalleeNumber, in.IntermediateNumber)
+	c, err := h.svc.EncryptedCall(r.Context(), tenantID, in.CallerNumber, in.CalleeNumber, in.IntermediateNumber)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return

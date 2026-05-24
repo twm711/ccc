@@ -133,7 +133,7 @@ func (r *CampaignCaseRepo) ListByCampaign(ctx context.Context, campaignID int64,
 func (r *CampaignCaseRepo) GetNextPending(ctx context.Context, campaignID int64) (*campaign.CampaignCase, error) {
 	var c campaign.CampaignCase
 	err := r.db.GetContext(ctx, &c,
-		"SELECT * FROM campaign_cases WHERE campaign_id = ? AND status = 'pending' ORDER BY id LIMIT 1", campaignID)
+		"SELECT * FROM campaign_cases WHERE campaign_id = ? AND status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= NOW()) ORDER BY id LIMIT 1", campaignID)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}

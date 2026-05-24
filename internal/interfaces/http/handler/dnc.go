@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -20,7 +21,7 @@ func NewDNCHandler(svc *integration.DNCService, repo integration.DNCRepository) 
 }
 
 func (h *DNCHandler) Create(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var input struct {
 		Number string `json:"number"`
 		Reason string `json:"reason"`
@@ -49,7 +50,7 @@ func (h *DNCHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *DNCHandler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {
@@ -74,7 +75,7 @@ func (h *DNCHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *DNCHandler) Check(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var input struct {
 		Numbers []string `json:"numbers"`
 	}

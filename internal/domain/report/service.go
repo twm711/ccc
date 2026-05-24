@@ -63,6 +63,7 @@ type ReportService struct {
 	b2b          Back2BackReportRepository
 	internal     InternalCallReportRepository
 	statusLog    AgentStatusLogRepository
+	campaigns    CampaignReportRepository
 }
 
 func NewReportService(
@@ -72,10 +73,11 @@ func NewReportService(
 	b2b Back2BackReportRepository,
 	internal InternalCallReportRepository,
 	statusLog AgentStatusLogRepository,
+	campaigns CampaignReportRepository,
 ) *ReportService {
 	return &ReportService{
 		agents: agents, groupAgents: groupAgents, skillGroups: skillGroups,
-		b2b: b2b, internal: internal, statusLog: statusLog,
+		b2b: b2b, internal: internal, statusLog: statusLog, campaigns: campaigns,
 	}
 }
 
@@ -101,4 +103,8 @@ func (s *ReportService) InternalCallReport(ctx context.Context, f ReportFilter) 
 
 func (s *ReportService) AgentStatusLogQuery(ctx context.Context, f ReportFilter, breakReasonCode string) ([]*AgentStatusLog, int64, error) {
 	return s.statusLog.Query(ctx, f, breakReasonCode)
+}
+
+func (s *ReportService) CampaignReport(ctx context.Context, f ReportFilter) ([]*CampaignReport, int64, error) {
+	return s.campaigns.Query(ctx, f)
 }

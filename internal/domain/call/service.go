@@ -42,17 +42,18 @@ func (s *CallService) SetTelephonyProvider(tp TelephonyProvider) {
 }
 
 type CreateCallInput struct {
-	TenantID      int64
-	Direction     CallDirection
-	CallType      CallType
-	MediaType     MediaType
-	Caller        string
-	Callee        string
-	AgentUserID   *int64
-	IVRFlowID     *int64
-	PhoneNumberID *int64
-	CarrierID     *int64
-	SIPTrunkID    *int64
+	TenantID       int64
+	Direction      CallDirection
+	CallType       CallType
+	MediaType      MediaType
+	Caller         string
+	Callee         string
+	AgentUserID    *int64
+	IVRFlowID      *int64
+	PhoneNumberID  *int64
+	CarrierID      *int64
+	SIPTrunkID     *int64
+	CampaignCaseID *int64
 }
 
 var ErrInvalidMediaType = fmt.Errorf("call: invalid media type, must be audio or video")
@@ -179,12 +180,13 @@ func (s *CallService) CreateOutboundCall(ctx context.Context, in CreateCallInput
 		MediaType:     mt,
 		Caller:        in.Caller,
 		Callee:        in.Callee,
-		AgentUserID:   in.AgentUserID,
-		PhoneNumberID: in.PhoneNumberID,
-		CarrierID:     in.CarrierID,
-		SIPTrunkID:    in.SIPTrunkID,
-		Status:        CallStatusRinging,
-		StartedAt:     now,
+		AgentUserID:    in.AgentUserID,
+		PhoneNumberID:  in.PhoneNumberID,
+		CarrierID:      in.CarrierID,
+		SIPTrunkID:     in.SIPTrunkID,
+		CampaignCaseID: in.CampaignCaseID,
+		Status:         CallStatusRinging,
+		StartedAt:      now,
 	}
 
 	if s.tp != nil {

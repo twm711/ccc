@@ -35,11 +35,12 @@ func NewService(
 }
 
 type DialRequest struct {
-	TenantID    int64
-	AgentUserID int64
-	Callee      string
-	MediaType   call.MediaType
-	CLIPolicyID *int64
+	TenantID       int64
+	AgentUserID    int64
+	Callee         string
+	MediaType      call.MediaType
+	CLIPolicyID    *int64
+	CampaignCaseID *int64
 }
 
 // Dial orchestrates an outbound call: DNC check → route match → CLI select → ESL originate.
@@ -67,12 +68,13 @@ func (s *Service) Dial(ctx context.Context, req DialRequest) (*call.Call, error)
 	// 4. Create call record
 	agentID := req.AgentUserID
 	input := call.CreateCallInput{
-		TenantID:      req.TenantID,
-		MediaType:     req.MediaType,
-		Caller:        cli.Number,
-		Callee:        req.Callee,
-		AgentUserID:   &agentID,
-		PhoneNumberID: &cli.ID,
+		TenantID:       req.TenantID,
+		MediaType:      req.MediaType,
+		Caller:         cli.Number,
+		Callee:         req.Callee,
+		AgentUserID:    &agentID,
+		PhoneNumberID:  &cli.ID,
+		CampaignCaseID: req.CampaignCaseID,
 	}
 	if rule != nil {
 		input.SIPTrunkID = &rule.SIPTrunkID

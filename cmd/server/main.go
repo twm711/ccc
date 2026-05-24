@@ -141,6 +141,7 @@ func main() {
 	skillGroupReportRepo := infraMySQL.NewSkillGroupReportRepo(db)
 	b2bReportRepo := infraMySQL.NewBack2BackReportRepo(db)
 	internalCallReportRepo := infraMySQL.NewInternalCallReportRepo(db)
+	campaignReportRepo := infraMySQL.NewCampaignReportRepo(db)
 	agentStatusLogRepo := infraMySQL.NewAgentStatusLogRepo(db)
 	csatConfigRepo := infraMySQL.NewCSATConfigRepo(db)
 	csatResultRepo := infraMySQL.NewCSATResultRepo(db)
@@ -177,7 +178,7 @@ func main() {
 
 	// --- Phase 4 Domain Services ---
 	dashboardSvc := report.NewDashboardService(dashboardRepo)
-	reportSvc := report.NewReportService(agentReportRepo, groupAgentReportRepo, skillGroupReportRepo, b2bReportRepo, internalCallReportRepo, agentStatusLogRepo)
+	reportSvc := report.NewReportService(agentReportRepo, groupAgentReportRepo, skillGroupReportRepo, b2bReportRepo, internalCallReportRepo, agentStatusLogRepo, campaignReportRepo)
 
 	// --- Phase 6 Domain Services ---
 	campaignSvc := campaign.NewCampaignService(campaignRepo, campaignCaseRepo, dncSvc)
@@ -209,9 +210,10 @@ func main() {
 	// Wire dialer to use outbound service for DNC/routing/CLI compliance
 	dialerSvc.SetDialFunc(func(ctx context.Context, tenantID int64, callee string, campaignID, caseID int64) error {
 		_, err := outboundSvc.Dial(ctx, outbound.DialRequest{
-			TenantID:  tenantID,
-			Callee:    callee,
-			MediaType: call.MediaTypeAudio,
+			TenantID:       tenantID,
+			Callee:         callee,
+			MediaType:      call.MediaTypeAudio,
+			CampaignCaseID: &caseID,
 		})
 		return err
 	})
@@ -521,6 +523,7 @@ func main() {
 
 	// Wire lifecycle → agentHub for real-time agent notifications
 	lifecycleSvc.SetAgentNotifier(agentHub)
+	lifecycleSvc.SetCampaignService(campaignSvc)
 
 	// Start WebSocket hub goroutines
 	hubCtx, hubCancel := context.WithCancel(context.Background())

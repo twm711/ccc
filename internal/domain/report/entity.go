@@ -150,6 +150,22 @@ type AgentStatusLog struct {
 	CreatedAt       time.Time `json:"created_at" db:"created_at"`
 }
 
+// CampaignReport represents aggregated metrics for a campaign.
+type CampaignReport struct {
+	CampaignID     int64   `json:"campaign_id" db:"campaign_id"`
+	CampaignName   string  `json:"campaign_name" db:"campaign_name"`
+	DialingMode    string  `json:"dialing_mode" db:"dialing_mode"`
+	Status         string  `json:"status" db:"status"`
+	TotalCases     int     `json:"total_cases" db:"total_cases"`
+	CompletedCases int     `json:"completed_cases" db:"completed_cases"`
+	SuccessCases   int     `json:"success_cases" db:"success_cases"`
+	FailedCases    int     `json:"failed_cases" db:"failed_cases"`
+	SkippedCases   int     `json:"skipped_cases" db:"skipped_cases"`
+	CompletionRate float64 `json:"completion_rate" db:"completion_rate"`
+	SuccessRate    float64 `json:"success_rate" db:"success_rate"`
+	AvgDurationSec float64 `json:"avg_duration_sec" db:"avg_duration_sec"`
+}
+
 // ReportFilter holds common filter parameters for report queries.
 type ReportFilter struct {
 	TenantID     int64
@@ -157,6 +173,7 @@ type ReportFilter struct {
 	EndTime      time.Time
 	AgentID      *int64
 	SkillGroupID *int64
+	CampaignID   *int64
 	Offset       int
 	Limit        int
 }

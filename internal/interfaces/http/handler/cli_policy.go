@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/telephony"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/divord97/ccc/pkg/snowflake"
 	"github.com/go-chi/chi/v5"
@@ -21,7 +22,7 @@ func NewCLIPolicyHandler(repo telephony.CLIPolicyRepository) *CLIPolicyHandler {
 }
 
 func (h *CLIPolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	var input struct {
 		Name          string `json:"name"`
 		Strategy      string `json:"strategy"`
@@ -55,7 +56,7 @@ func (h *CLIPolicyHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *CLIPolicyHandler) List(w http.ResponseWriter, r *http.Request) {
-	tenantID, _ := strconv.ParseInt(r.Header.Get("X-Tenant-ID"), 10, 64)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit <= 0 {

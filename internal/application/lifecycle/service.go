@@ -9,6 +9,7 @@ import (
 	"github.com/divord97/ccc/internal/application/screenpop"
 	"github.com/divord97/ccc/internal/application/webhook"
 	"github.com/divord97/ccc/internal/domain/call"
+	"github.com/divord97/ccc/internal/domain/campaign"
 	"github.com/divord97/ccc/internal/domain/crm"
 	"github.com/divord97/ccc/internal/domain/identity"
 	"github.com/divord97/ccc/internal/infrastructure/esl"
@@ -31,6 +32,7 @@ type Service struct {
 	recordingRepo call.RecordingRepository
 	eslClient     *esl.Client
 	notifier      AgentNotifier
+	campaignSvc   *campaign.CampaignService
 }
 
 func NewService(
@@ -57,6 +59,10 @@ func NewService(
 
 func (s *Service) SetAgentNotifier(n AgentNotifier) {
 	s.notifier = n
+}
+
+func (s *Service) SetCampaignService(svc *campaign.CampaignService) {
+	s.campaignSvc = svc
 }
 
 // EndCall ends a call and triggers all post-call side effects:
@@ -151,6 +157,19 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 				AgentName:  fmt.Sprintf("agent_%d", *c.AgentUserID),
 			})
 		}
+	}
+
+	// Campaign case writeback: update case with actual call duration and disposition
+	if s.campaignSvc != nil && c.CampaignCaseID != nil {
+		disposition := "completed"
+		if c.AnsweredAt == nil {
+			disposition = "no_answer"
+		}
+		talkSec := 0
+		if c.AnsweredAt != nil && c.EndedAt != nil {
+			talkSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
+		}
+		_, _ = s.campaignSvc.MarkCaseCompleted(ctx, *c.CampaignCaseID, disposition, talkSec)
 	}
 
 	return c, nil

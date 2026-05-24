@@ -39,3 +39,8 @@ type InternalCallReportRepository interface {
 type AgentStatusLogRepository interface {
 	Query(ctx context.Context, f ReportFilter, breakReasonCode string) ([]*AgentStatusLog, int64, error)
 }
+
+// CampaignReportRepository provides campaign-level aggregated reports.
+type CampaignReportRepository interface {
+	Query(ctx context.Context, f ReportFilter) ([]*CampaignReport, int64, error)
+}

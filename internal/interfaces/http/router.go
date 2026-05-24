@@ -367,6 +367,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/back2back", deps.ReportHandler.Back2BackReport)
 			r.Get("/internal-calls", deps.ReportHandler.InternalCallReport)
 			r.Get("/agent-status-log", deps.ReportHandler.AgentStatusLog)
+			r.Get("/campaigns", deps.ReportHandler.CampaignReport)
 		})
 
 		r.Route("/csat", func(r chi.Router) {

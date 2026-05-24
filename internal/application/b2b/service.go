@@ -72,17 +72,19 @@ func (s *Service) FlashSMS(ctx context.Context, tenantID int64, phoneNumber, mes
 
 // EncryptedCall initiates a privacy-protected call with number masking.
 func (s *Service) EncryptedCall(ctx context.Context, tenantID int64, callerNumber, calleeNumber, intermediateNumber string) (*call.Call, error) {
+	masked := MaskNumber(calleeNumber)
 	now := time.Now()
 	c := &call.Call{
-		ID:        snowflake.NextID(),
-		TenantID:  tenantID,
-		CallType:  call.CallTypeDoubleCall,
-		Direction: call.DirectionOutbound,
-		MediaType: call.MediaTypeAudio,
-		Caller:    callerNumber,
-		Callee:    intermediateNumber, // agent sees intermediate number
-		Status:    call.CallStatusRinging,
-		StartedAt: now,
+		ID:           snowflake.NextID(),
+		TenantID:     tenantID,
+		CallType:     call.CallTypeDoubleCall,
+		Direction:    call.DirectionOutbound,
+		MediaType:    call.MediaTypeAudio,
+		Caller:       callerNumber,
+		Callee:       intermediateNumber,
+		MaskedCallee: &masked,
+		Status:       call.CallStatusRinging,
+		StartedAt:    now,
 	}
 
 	if err := s.calls.Create(ctx, c); err != nil {
@@ -93,6 +95,13 @@ func (s *Service) EncryptedCall(ctx context.Context, tenantID int64, callerNumbe
 		ID: snowflake.NextID(), CallID: c.ID, TenantID: tenantID,
 		Event: "encrypted_call", Detail: "intermediate:" + intermediateNumber, CreatedAt: now,
 	})
+
+	// Originate encrypted call via ESL with number masking
+	if s.esl != nil && intermediateNumber != "" {
+		go func() {
+			_ = s.esl.OriginateB2B(context.Background(), callerNumber, calleeNumber, intermediateNumber, "default")
+		}()
+	}
 
 	return c, nil
 }

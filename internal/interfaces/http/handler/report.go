@@ -168,3 +168,13 @@ func (h *ReportHandler) AgentStatusLogExport(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Content-Disposition", "attachment; filename=agent_status_log.csv")
 	_ = export.WriteAgentStatusLogCSV(w, items)
 }
+
+func (h *ReportHandler) CampaignReport(w http.ResponseWriter, r *http.Request) {
+	f := parseReportFilter(r)
+	items, total, err := h.svc.CampaignReport(r.Context(), f)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]interface{}{"items": items, "total": total})
+}

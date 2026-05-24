@@ -3,6 +3,7 @@ package dialer
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,6 +162,10 @@ func (s *Service) dialBatch(ctx context.Context, campaignID int64, state *dialer
 		return
 	}
 
+	if !s.isWithinSchedule(c) {
+		return
+	}
+
 	switch state.mode {
 	case campaign.DialingModePredictive:
 		s.dialPredictive(ctx, c, state)
@@ -308,4 +313,24 @@ func (s *Service) RecordCallResult(ctx context.Context, campaignID, caseID int64
 	} else {
 		_, _ = s.campaignSvc.MarkCaseFailed(ctx, caseID)
 	}
+}
+
+// isWithinSchedule checks if current time falls within campaign's allowed schedule.
+func (s *Service) isWithinSchedule(c *campaign.Campaign) bool {
+	if c.ScheduleDays == "" {
+		return true
+	}
+
+	now := time.Now()
+	if c.Timezone != "" {
+		if loc, err := time.LoadLocation(c.Timezone); err == nil {
+			now = now.In(loc)
+		}
+	}
+
+	weekday := strings.ToLower(now.Weekday().String())
+	if !strings.Contains(strings.ToLower(c.ScheduleDays), weekday) {
+		return false
+	}
+	return true
 }

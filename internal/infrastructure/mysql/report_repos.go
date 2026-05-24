@@ -237,3 +237,49 @@ func (r *AgentStatusLogRepo) Query(ctx context.Context, f report.ReportFilter, b
 	err := r.db.SelectContext(ctx, &items, query, args...)
 	return items, total, err
 }
+
+// CampaignReportRepo implements report.CampaignReportRepository.
+type CampaignReportRepo struct{ db *sqlx.DB }
+
+func NewCampaignReportRepo(db *sqlx.DB) *CampaignReportRepo {
+	return &CampaignReportRepo{db: db}
+}
+
+func (r *CampaignReportRepo) Query(ctx context.Context, f report.ReportFilter) ([]*report.CampaignReport, int64, error) {
+	query := `SELECT
+		c.id AS campaign_id,
+		c.name AS campaign_name,
+		c.dialing_mode,
+		c.status,
+		c.total_cases,
+		c.completed_cases,
+		c.success_cases,
+		c.failed_cases,
+		COALESCE(SUM(CASE WHEN cs.status = 'skipped' THEN 1 ELSE 0 END), 0) AS skipped_cases,
+		CASE WHEN c.total_cases > 0 THEN ROUND(c.completed_cases * 100.0 / c.total_cases, 2) ELSE 0 END AS completion_rate,
+		CASE WHEN c.completed_cases > 0 THEN ROUND(c.success_cases * 100.0 / c.completed_cases, 2) ELSE 0 END AS success_rate,
+		COALESCE(AVG(cs.duration_sec), 0) AS avg_duration_sec
+	FROM campaigns c
+	LEFT JOIN campaign_cases cs ON cs.campaign_id = c.id
+	WHERE c.tenant_id = ? AND c.created_at BETWEEN ? AND ?`
+
+	args := []interface{}{f.TenantID, f.StartTime, f.EndTime}
+
+	if f.CampaignID != nil {
+		query += " AND c.id = ?"
+		args = append(args, *f.CampaignID)
+	}
+
+	query += " GROUP BY c.id, c.name, c.dialing_mode, c.status, c.total_cases, c.completed_cases, c.success_cases, c.failed_cases ORDER BY c.created_at DESC"
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM (%s) sub", query)
+	var total int64
+	_ = r.db.GetContext(ctx, &total, countQuery, args...)
+
+	query += " LIMIT ? OFFSET ?"
+	args = append(args, f.Limit, f.Offset)
+
+	var items []*report.CampaignReport
+	err := r.db.SelectContext(ctx, &items, query, args...)
+	return items, total, err
+}
