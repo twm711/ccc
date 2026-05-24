@@ -227,6 +227,7 @@ func (s *IMService) SendMessage(ctx context.Context, sessionID int64, senderType
 	}
 
 	msg := &IMMessage{
+		ID:          snowflake.NextID(),
 		SessionID:   sessionID,
 		SenderType:  senderType,
 		SenderID:    senderID,

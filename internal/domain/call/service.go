@@ -133,6 +133,8 @@ func (s *CallService) EndCall(ctx context.Context, id int64, reason HangupReason
 
 	if c.AnsweredAt != nil {
 		c.WaitDurationSec = int(c.AnsweredAt.Sub(c.StartedAt).Seconds())
+	} else {
+		c.WaitDurationSec = int(now.Sub(c.StartedAt).Seconds())
 	}
 
 	if err := s.calls.Update(ctx, c); err != nil {

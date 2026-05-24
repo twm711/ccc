@@ -56,7 +56,7 @@ func (s *Service) Deliver(ctx context.Context, evt Event) {
 		if !s.matchesEvent(cfg.Events, evt.Type) {
 			continue
 		}
-		go s.deliverToConfig(ctx, cfg, evt.Type, payloadBytes)
+		go s.deliverToConfig(context.Background(), cfg, evt.Type, payloadBytes)
 	}
 }
 
