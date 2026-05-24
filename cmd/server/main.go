@@ -95,7 +95,6 @@ func main() {
 	businessHoursRepo := infraMySQL.NewBusinessHoursRepo(db)
 	businessHoursScheduleRepo := infraMySQL.NewBusinessHoursScheduleRepo(db)
 	queueSnapshotRepo := infraMySQL.NewQueueSnapshotRepo(db)
-	_ = queueSnapshotRepo // available for queue monitoring
 
 	// --- Phase 2 Repositories ---
 	callRepo := infraMySQL.NewCallRepo(db)
@@ -239,7 +238,7 @@ func main() {
 		return g, nil
 	}
 	ivrEngine := ivr.DefaultEngine(eslClient, ivrFlowLoader)
-	_ = ivrEngine
+	lifecycleSvc.SetIVREngine(ivrEngine)
 	// LLM Provider: use DashScope when API key configured, otherwise fallback to stub.
 	var llmProvider llm.Provider
 	if cfg.Aliyun.DashScopeAPIKey != "" {
@@ -524,6 +523,7 @@ func main() {
 	// Wire lifecycle → agentHub for real-time agent notifications
 	lifecycleSvc.SetAgentNotifier(agentHub)
 	lifecycleSvc.SetCampaignService(campaignSvc)
+	lifecycleSvc.SetQueueSnapshotRepo(queueSnapshotRepo)
 
 	// Start WebSocket hub goroutines
 	hubCtx, hubCancel := context.WithCancel(context.Background())

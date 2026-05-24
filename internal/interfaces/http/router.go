@@ -380,6 +380,10 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		// --- Phase 5 Routes ---
 
 		// Advanced call control (added to existing /calls route)
+		r.Post("/calls/inbound", deps.CallControlHandler.InboundCall)
+		r.Post("/calls/{id}/queue", deps.CallControlHandler.TransitionToQueue)
+		r.Post("/calls/{id}/ring", deps.CallControlHandler.TransitionToRinging)
+		r.Post("/calls/{id}/disposition", deps.CallControlHandler.SetDisposition)
 		r.Post("/calls/{id}/attended-transfer", deps.CallControlHandler.AttendedTransfer)
 		// Campaign resume
 		r.Post("/campaigns/{id}/resume", deps.CampaignHandler.Start)

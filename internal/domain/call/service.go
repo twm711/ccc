@@ -48,6 +48,7 @@ type CreateCallInput struct {
 	MediaType      MediaType
 	Caller         string
 	Callee         string
+	ChannelUUID    string
 	AgentUserID    *int64
 	IVRFlowID      *int64
 	PhoneNumberID  *int64
@@ -89,6 +90,7 @@ func (s *CallService) CreateInboundCall(ctx context.Context, in CreateCallInput)
 		MediaType:     mt,
 		Caller:        in.Caller,
 		Callee:        in.Callee,
+		ChannelUUID:   in.ChannelUUID,
 		IVRFlowID:     in.IVRFlowID,
 		PhoneNumberID: in.PhoneNumberID,
 		CarrierID:     in.CarrierID,
@@ -314,7 +316,7 @@ func (s *CallService) AnswerCall(ctx context.Context, id int64, agentUserID int6
 	if err != nil || c == nil {
 		return nil, ErrCallNotFound
 	}
-	if c.Status != CallStatusRinging && c.Status != CallStatusIVR {
+	if c.Status != CallStatusRinging && c.Status != CallStatusIVR && c.Status != CallStatusQueue {
 		return nil, ErrCallNotActive
 	}
 
@@ -720,6 +722,23 @@ func (s *CallService) WhisperPreConnect(ctx context.Context, callID int64, messa
 		Event: "whisper_pre_connect", Detail: message, CreatedAt: time.Now(),
 	})
 	return nil
+}
+
+// SetDisposition sets a disposition code on a completed call (used during ACW).
+func (s *CallService) SetDisposition(ctx context.Context, id int64, code string) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	c.DispositionCode = &code
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "disposition_set", Detail: code, CreatedAt: time.Now(),
+	})
+	return c, nil
 }
 
 // ListEvents returns all events for a call.

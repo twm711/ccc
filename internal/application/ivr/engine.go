@@ -11,7 +11,8 @@ import (
 
 // Engine interprets an IVR FlowGraph DAG node-by-node.
 type Engine struct {
-	handlers map[routing.NodeType]NodeHandler
+	handlers   map[routing.NodeType]NodeHandler
+	flowLoader FlowLoader
 }
 
 // NodeHandler processes a single IVR node and returns the exit name to follow.
@@ -120,9 +121,22 @@ func NewSession(callID, tenantID, flowID int64, callUUID string, eslClient *esl.
 // FlowLoader retrieves a parsed FlowGraph by flow ID.
 type FlowLoader func(ctx context.Context, flowID int64) (*routing.FlowGraph, error)
 
+// ExecuteFlow loads a flow by ID and executes it within the given session.
+func (e *Engine) ExecuteFlow(ctx context.Context, sess *Session, flowID int64) error {
+	if e.flowLoader == nil {
+		return fmt.Errorf("ivr: no flow loader configured")
+	}
+	graph, err := e.flowLoader(ctx, flowID)
+	if err != nil {
+		return err
+	}
+	return e.Execute(ctx, sess, graph)
+}
+
 // DefaultEngine returns an engine with all built-in node handlers registered.
 func DefaultEngine(eslClient *esl.Client, flowLoader FlowLoader) *Engine {
 	e := NewEngine()
+	e.flowLoader = flowLoader
 	e.RegisterHandler(routing.NodeStart, &StartHandler{})
 	e.RegisterHandler(routing.NodePlay, &PlayHandler{})
 	e.RegisterHandler(routing.NodeCollectDTMF, &CollectDTMFHandler{})

@@ -20,6 +20,87 @@ func NewCallControlHandler(svc *call.CallService, lc *lifecycle.Service) *CallCo
 	return &CallControlHandler{svc: svc, lifecycle: lc}
 }
 
+func (h *CallControlHandler) InboundCall(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		TenantID      int64  `json:"tenant_id"`
+		Caller        string `json:"caller"`
+		Callee        string `json:"callee"`
+		ChannelUUID   string `json:"channel_uuid"`
+		IVRFlowID     *int64 `json:"ivr_flow_id"`
+		PhoneNumberID *int64 `json:"phone_number_id"`
+		CarrierID     *int64 `json:"carrier_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	c, err := h.lifecycle.HandleInboundCall(r.Context(), call.CreateCallInput{
+		TenantID:      in.TenantID,
+		Caller:        in.Caller,
+		Callee:        in.Callee,
+		ChannelUUID:   in.ChannelUUID,
+		IVRFlowID:     in.IVRFlowID,
+		PhoneNumberID: in.PhoneNumberID,
+		CarrierID:     in.CarrierID,
+	})
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusCreated, c)
+}
+
+func (h *CallControlHandler) TransitionToQueue(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var in struct {
+		SkillGroupID int64 `json:"skill_group_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := h.lifecycle.TransitionCallToQueue(r.Context(), id, in.SkillGroupID)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, c)
+}
+
+func (h *CallControlHandler) TransitionToRinging(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var in struct {
+		AgentUserID int64 `json:"agent_user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := h.lifecycle.TransitionCallToRinging(r.Context(), id, in.AgentUserID)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, c)
+}
+
+func (h *CallControlHandler) SetDisposition(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var in struct {
+		DispositionCode string `json:"disposition_code"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := h.svc.SetDisposition(r.Context(), id, in.DispositionCode)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, c)
+}
+
 func (h *CallControlHandler) Hold(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	c, err := h.svc.HoldCall(r.Context(), id)

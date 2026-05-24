@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/application/csat"
+	"github.com/divord97/ccc/internal/application/ivr"
 	"github.com/divord97/ccc/internal/application/screenpop"
 	"github.com/divord97/ccc/internal/application/webhook"
 	"github.com/divord97/ccc/internal/domain/call"
@@ -29,10 +30,12 @@ type Service struct {
 	webhookSvc    *webhook.Service
 	customerSvc   *crm.CustomerService
 	screenPop     *screenpop.Service
-	recordingRepo call.RecordingRepository
-	eslClient     *esl.Client
-	notifier      AgentNotifier
-	campaignSvc   *campaign.CampaignService
+	recordingRepo     call.RecordingRepository
+	queueSnapshotRepo call.QueueSnapshotRepository
+	eslClient         *esl.Client
+	notifier          AgentNotifier
+	ivrEngine         *ivr.Engine
+	campaignSvc       *campaign.CampaignService
 }
 
 func NewService(
@@ -65,6 +68,15 @@ func (s *Service) SetCampaignService(svc *campaign.CampaignService) {
 	s.campaignSvc = svc
 }
 
+func (s *Service) SetIVREngine(e *ivr.Engine) {
+	s.ivrEngine = e
+}
+
+func (s *Service) SetQueueSnapshotRepo(r call.QueueSnapshotRepository) {
+	s.queueSnapshotRepo = r
+}
+
+
 // EndCall ends a call and triggers all post-call side effects:
 //   - Hangup FreeSWITCH channel
 //   - Save recording record to DB
@@ -91,13 +103,14 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 		if c.EndedAt != nil {
 			durSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
 		}
+		recPath := fmt.Sprintf("/recordings/%d/%d.wav", c.TenantID, c.ID)
 		_ = s.recordingRepo.Create(ctx, &call.Recording{
 			ID:          snowflake.NextID(),
 			TenantID:    c.TenantID,
 			CallID:      c.ID,
 			AgentUserID: c.AgentUserID,
 			FileName:    fmt.Sprintf("%d.wav", c.ID),
-			FilePath:    fmt.Sprintf("/recordings/%d/%d.wav", c.TenantID, c.ID),
+			FilePath:    recPath,
 			DurationSec: durSec,
 			MimeType:    "audio/wav",
 			StorageTier: "hot",
@@ -105,6 +118,8 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 			Status:      "completed",
 			CreatedAt:   time.Now(),
 		})
+		c.RecordingURL = &recPath
+		_ = s.callSvc.UpdateDurations(ctx, c)
 	}
 
 	// Calculate IVR/queue/ring durations from call events
@@ -159,17 +174,17 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 		}
 	}
 
-	// Campaign case writeback: update case with actual call duration and disposition
+	// Campaign case writeback: answered→completed (with duration), unanswered→failed (retry)
 	if s.campaignSvc != nil && c.CampaignCaseID != nil {
-		disposition := "completed"
-		if c.AnsweredAt == nil {
-			disposition = "no_answer"
+		if c.AnsweredAt != nil {
+			talkSec := 0
+			if c.EndedAt != nil {
+				talkSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
+			}
+			_, _ = s.campaignSvc.MarkCaseCompleted(ctx, *c.CampaignCaseID, "completed", talkSec)
+		} else {
+			_, _ = s.campaignSvc.MarkCaseFailed(ctx, *c.CampaignCaseID)
 		}
-		talkSec := 0
-		if c.AnsweredAt != nil && c.EndedAt != nil {
-			talkSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
-		}
-		_, _ = s.campaignSvc.MarkCaseCompleted(ctx, *c.CampaignCaseID, disposition, talkSec)
 	}
 
 	return c, nil
@@ -226,4 +241,83 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 	}
 
 	return c, popData, nil
+}
+
+// HandleInboundCall creates an inbound call, runs IVR if configured, and transitions to queue.
+func (s *Service) HandleInboundCall(ctx context.Context, in call.CreateCallInput) (*call.Call, error) {
+	c, err := s.callSvc.CreateInboundCall(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+
+	// Run IVR flow if engine and flow are configured
+	if s.ivrEngine != nil && c.IVRFlowID != nil {
+		sess := ivr.NewSession(c.ID, c.TenantID, *c.IVRFlowID, c.ChannelUUID, s.eslClient, map[string]string{
+			"caller_number": c.Caller,
+			"callee_number": c.Callee,
+			"call_id":       fmt.Sprintf("%d", c.ID),
+		})
+		// IVR execution is best-effort; errors are logged as events
+		if err := s.ivrEngine.ExecuteFlow(ctx, sess, *c.IVRFlowID); err != nil {
+			now := time.Now()
+			_ = s.callSvc.RecordIVRTracking(ctx, &call.IVRTracking{
+				CallID:    c.ID,
+				TenantID:  c.TenantID,
+				IVRFlowID: *c.IVRFlowID,
+				NodeID:    "error",
+				NodeType:  "error",
+				ExitName:  err.Error(),
+				EnteredAt: now,
+				ExitedAt:  &now,
+			})
+		}
+	}
+
+	// Webhook: call.created (inbound)
+	if s.webhookSvc != nil {
+		s.webhookSvc.Deliver(ctx, webhook.Event{
+			TenantID:  c.TenantID,
+			Type:      "call.created",
+			Payload:   c,
+			Timestamp: time.Now(),
+		})
+	}
+
+	return c, nil
+}
+
+// TransitionCallToQueue moves a call from IVR to Queue status via lifecycle.
+func (s *Service) TransitionCallToQueue(ctx context.Context, callID, skillGroupID int64) (*call.Call, error) {
+	c, err := s.callSvc.TransitionToQueue(ctx, callID, skillGroupID)
+	if err != nil {
+		return nil, err
+	}
+	if s.queueSnapshotRepo != nil {
+		_ = s.queueSnapshotRepo.Create(ctx, &call.QueueSnapshot{
+			ID:           snowflake.NextID(),
+			TenantID:     c.TenantID,
+			SkillGroupID: skillGroupID,
+			WaitingCount: 1,
+			SnapshotAt:   time.Now(),
+		})
+	}
+	if s.notifier != nil && c.AgentUserID != nil {
+		s.notifier.NotifyAgent(*c.AgentUserID, "call.queued", c.ID, c)
+	}
+	return c, nil
+}
+
+// TransitionCallToRinging moves a call from Queue/IVR to Ringing status via lifecycle.
+func (s *Service) TransitionCallToRinging(ctx context.Context, callID, agentUserID int64) (*call.Call, error) {
+	c, err := s.callSvc.TransitionToRinging(ctx, callID, agentUserID)
+	if err != nil {
+		return nil, err
+	}
+	if s.presenceSvc != nil {
+		_, _ = s.presenceSvc.TransitionTo(ctx, agentUserID, identity.PresenceDialing)
+	}
+	if s.notifier != nil {
+		s.notifier.NotifyAgent(agentUserID, "call.ringing", c.ID, c)
+	}
+	return c, nil
 }

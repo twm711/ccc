@@ -235,6 +235,9 @@ func (s *CampaignService) MarkCaseCompleted(ctx context.Context, caseID int64, d
 	if err != nil || cs == nil {
 		return nil, ErrCaseNotFound
 	}
+	if cs.Status == CaseStatusCompleted {
+		return cs, nil
+	}
 
 	now := time.Now()
 	cs.Status = CaseStatusCompleted

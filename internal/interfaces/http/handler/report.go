@@ -171,6 +171,10 @@ func (h *ReportHandler) AgentStatusLogExport(w http.ResponseWriter, r *http.Requ
 
 func (h *ReportHandler) CampaignReport(w http.ResponseWriter, r *http.Request) {
 	f := parseReportFilter(r)
+	if cIDStr := r.URL.Query().Get("campaign_id"); cIDStr != "" {
+		id, _ := strconv.ParseInt(cIDStr, 10, 64)
+		f.CampaignID = &id
+	}
 	items, total, err := h.svc.CampaignReport(r.Context(), f)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
