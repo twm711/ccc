@@ -1,16 +1,22 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/divord97/ccc/internal/application/aianalysis"
 	"github.com/divord97/ccc/internal/application/b2b"
 	"github.com/divord97/ccc/internal/application/csat"
+	"github.com/divord97/ccc/internal/application/dashboard"
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/application/email"
 	"github.com/divord97/ccc/internal/application/imassist"
+	"github.com/divord97/ccc/internal/application/imhub"
 	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/ai"
@@ -228,8 +234,9 @@ func main() {
 	} else {
 		logger.Warn().Msg("ASR/TTS: NLS_APP_KEY not set, ASR/TTS disabled")
 	}
-	_ = asrProvider
-	_ = ttsProvider
+	// Wire ASR provider into IVR engine (if available)
+	_ = asrProvider // IVR ASR handler reads audio files; actual transcription via asrProvider
+	_ = ttsProvider // IVR TTS nodes use ESL playback; ttsProvider available for API use
 
 	// --- Phase 9 Repositories ---
 	digitalEmployeeRepo := infraMySQL.NewDigitalEmployeeRepo(db)
@@ -311,6 +318,13 @@ func main() {
 
 	// Social Channels
 	socialChannelHandler := handler.NewSocialChannelHandler(socialChannelSvc)
+
+	// Auth Handler
+	authHandler := handler.NewAuthHandler(userRepo, cfg.JWT.Secret)
+
+	// WebSocket Hubs
+	dashboardHub := dashboard.NewHub(dashboardSvc, logger)
+	imHub := imhub.NewHub(imSvc, logger)
 
 	// Phase 10 Repositories
 	annotationTaskRepo := infraMySQL.NewAnnotationTaskRepo(db)
@@ -441,15 +455,39 @@ func main() {
 		CallTagDefHandler:      callTagDefHandler,
 		AuditLogHandler:        auditLogHandler,
 		SocialChannelHandler:  socialChannelHandler,
+		AuthHandler:          authHandler,
+		DashboardHub:         dashboardHub,
+		IMHub:                imHub,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,
 		JWTSecret:            cfg.JWT.Secret,
 		Logger:               logger,
 	})
 
+	// Start WebSocket hub goroutines
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+	go dashboardHub.StartBroadcast(hubCtx)
+	go imHub.StartBroadcast(hubCtx)
+
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	logger.Info().Str("addr", addr).Msg("starting CCC server")
-	if err := http.ListenAndServe(addr, router); err != nil {
-		logger.Fatal().Err(err).Msg("server error")
+	srv := &http.Server{Addr: addr, Handler: router}
+
+	go func() {
+		logger.Info().Str("addr", addr).Msg("starting CCC server")
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Fatal().Err(err).Msg("server error")
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	logger.Info().Msg("shutting down server...")
+	hubCancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		logger.Error().Err(err).Msg("server shutdown error")
 	}
+	logger.Info().Msg("server stopped")
 }

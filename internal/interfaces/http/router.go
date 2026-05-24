@@ -1,6 +1,10 @@
 package http
 
 import (
+	"net/http"
+
+	"github.com/divord97/ccc/internal/application/dashboard"
+	"github.com/divord97/ccc/internal/application/imhub"
 	"github.com/divord97/ccc/internal/domain/ai"
 	"github.com/divord97/ccc/internal/domain/platform"
 	"github.com/divord97/ccc/internal/infrastructure/redis"
@@ -101,6 +105,13 @@ type RouterDeps struct {
 	// Social Channels
 	SocialChannelHandler *handler.SocialChannelHandler
 
+	// Auth
+	AuthHandler *handler.AuthHandler
+
+	// WebSocket Hubs
+	DashboardHub *dashboard.Hub
+	IMHub        *imhub.Hub
+
 	// Infrastructure
 	RateLimiter  *redis.RateLimiter
 	AuditLogRepo platform.AuditLogRepository
@@ -113,11 +124,27 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(chiMiddleware.RequestID)
+	r.Use(middleware.CORS)
 	r.Use(middleware.Metrics)
 	r.Use(middleware.RequestLogger(deps.Logger))
 
 	r.Get("/health", handler.Health)
 	r.Handle("/metrics", promhttp.Handler())
+
+	// --- Public Auth Route (no JWT) ---
+	r.Post("/api/v1/auth/login", deps.AuthHandler.Login)
+
+	// --- WebSocket Routes (auth via query param) ---
+	if deps.DashboardHub != nil {
+		r.Get("/api/v1/ws/dashboard", func(w http.ResponseWriter, r *http.Request) {
+			deps.DashboardHub.ServeWS(w, r)
+		})
+	}
+	if deps.IMHub != nil {
+		r.Get("/api/v1/ws/im", func(w http.ResponseWriter, r *http.Request) {
+			deps.IMHub.ServeWS(w, r)
+		})
+	}
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.Auth(deps.JWTSecret))
@@ -212,7 +239,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Route("/voicemails", func(r chi.Router) {
 			r.Get("/", deps.VoicemailHandler.List)
 			r.Get("/{id}", deps.VoicemailHandler.Get)
-			r.Patch("/{id}/read", deps.VoicemailHandler.MarkRead)
+			r.Put("/{id}/read", deps.VoicemailHandler.MarkRead)
 			r.Delete("/{id}", deps.VoicemailHandler.Delete)
 		})
 
@@ -258,7 +285,9 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		// --- Phase 3 Routes ---
 
 		r.Route("/agent-presence", func(r chi.Router) {
+			r.Get("/", deps.AgentPresenceHandler.ListByTenant)
 			r.Post("/check-in", deps.AgentPresenceHandler.CheckIn)
+			r.Post("/status", deps.AgentPresenceHandler.ChangeStatus)
 			r.Post("/{agentId}/check-out", deps.AgentPresenceHandler.CheckOut)
 			r.Post("/{agentId}/transition", deps.AgentPresenceHandler.Transition)
 			r.Post("/{agentId}/break", deps.AgentPresenceHandler.SetBreak)
@@ -300,27 +329,27 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Route("/dashboard", func(r chi.Router) {
 			r.Get("/overview", deps.DashboardHandler.Overview)
-			r.Get("/agent-status", deps.DashboardHandler.AgentStatus)
-			r.Get("/skill-group-status", deps.DashboardHandler.SkillGroupStatus)
-			r.Get("/call-trend", deps.DashboardHandler.CallTrend)
-			r.Get("/call-funnel", deps.DashboardHandler.CallFunnel)
+			r.Get("/agents", deps.DashboardHandler.AgentStatus)
+			r.Get("/skill-groups", deps.DashboardHandler.SkillGroupStatus)
+			r.Get("/trend", deps.DashboardHandler.CallTrend)
+			r.Get("/funnel", deps.DashboardHandler.CallFunnel)
 		})
 
 		r.Route("/reports", func(r chi.Router) {
-			r.Get("/agent", deps.ReportHandler.AgentReport)
-			r.Get("/agent/export", deps.ReportHandler.AgentReportExport)
-			r.Get("/group-agent", deps.ReportHandler.GroupAgentReport)
-			r.Get("/group-agent/export", deps.ReportHandler.GroupAgentReportExport)
-			r.Get("/skill-group", deps.ReportHandler.SkillGroupReport)
-			r.Get("/skill-group/export", deps.ReportHandler.SkillGroupReportExport)
+			r.Get("/agents", deps.ReportHandler.AgentReport)
+			r.Get("/agents/export", deps.ReportHandler.AgentReportExport)
+			r.Get("/group-agents", deps.ReportHandler.GroupAgentReport)
+			r.Get("/group-agents/export", deps.ReportHandler.GroupAgentReportExport)
+			r.Get("/skill-groups", deps.ReportHandler.SkillGroupReport)
+			r.Get("/skill-groups/export", deps.ReportHandler.SkillGroupReportExport)
 			r.Get("/back2back", deps.ReportHandler.Back2BackReport)
-			r.Get("/internal-call", deps.ReportHandler.InternalCallReport)
+			r.Get("/internal-calls", deps.ReportHandler.InternalCallReport)
 			r.Get("/agent-status-log", deps.ReportHandler.AgentStatusLog)
 		})
 
 		r.Route("/csat", func(r chi.Router) {
 			r.Post("/config", deps.CSATHandler.CreateConfig)
-			r.Get("/", deps.CSATHandler.ListConfigs)
+			r.Get("/config", deps.CSATHandler.ListConfigs)
 			r.Put("/config", deps.CSATHandler.UpdateConfig)
 			r.Get("/results", deps.CSATHandler.ListResults)
 		})
@@ -329,6 +358,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		// Advanced call control (added to existing /calls route)
 		r.Post("/calls/{id}/attended-transfer", deps.CallControlHandler.AttendedTransfer)
+		// Campaign resume
+		r.Post("/campaigns/{id}/resume", deps.CampaignHandler.Start)
 		r.Post("/calls/{id}/consult", deps.CallControlHandler.Consult)
 		r.Post("/calls/{id}/consult-transfer", deps.CallControlHandler.ConsultTransfer)
 		r.Post("/calls/{id}/consult-cancel", deps.CallControlHandler.ConsultCancel)
@@ -341,6 +372,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Route("/me", func(r chi.Router) {
 			r.Get("/overview", deps.ProfileHandler.Overview)
+			r.Get("/profile", deps.ProfileHandler.Overview)
 			r.Put("/profile", deps.ProfileHandler.UpdateProfile)
 			r.Put("/password", deps.ProfileHandler.ChangePassword)
 			r.Post("/reset-state", deps.ProfileHandler.ResetState)
@@ -411,17 +443,18 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Post("/{id}/comments", deps.TicketHandler.AddComment)
 		})
 
-		r.Route("/knowledge-categories", func(r chi.Router) {
-			r.Post("/", deps.KnowledgeHandler.CreateCategory)
-			r.Get("/", deps.KnowledgeHandler.ListCategories)
-		})
-
-		r.Route("/knowledge-articles", func(r chi.Router) {
-			r.Post("/", deps.KnowledgeHandler.CreateArticle)
-			r.Get("/", deps.KnowledgeHandler.ListArticles)
-			r.Get("/search", deps.KnowledgeHandler.Search)
-			r.Get("/{id}", deps.KnowledgeHandler.GetArticle)
-			r.Put("/{id}", deps.KnowledgeHandler.UpdateArticle)
+		r.Route("/knowledge", func(r chi.Router) {
+			r.Route("/categories", func(r chi.Router) {
+				r.Post("/", deps.KnowledgeHandler.CreateCategory)
+				r.Get("/", deps.KnowledgeHandler.ListCategories)
+			})
+			r.Route("/articles", func(r chi.Router) {
+				r.Post("/", deps.KnowledgeHandler.CreateArticle)
+				r.Get("/", deps.KnowledgeHandler.ListArticles)
+				r.Get("/search", deps.KnowledgeHandler.Search)
+				r.Get("/{id}", deps.KnowledgeHandler.GetArticle)
+				r.Put("/{id}", deps.KnowledgeHandler.UpdateArticle)
+			})
 		})
 
 		r.Route("/agent-scripts", func(r chi.Router) {
@@ -438,19 +471,20 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		// --- Phase 8 Routes ---
 
-		r.Route("/im-channels", func(r chi.Router) {
-			r.Post("/", deps.IMChannelHandler.Create)
-			r.Get("/", deps.IMChannelHandler.List)
-			r.Put("/{id}", deps.IMChannelHandler.Update)
-		})
-
-		r.Route("/im-sessions", func(r chi.Router) {
-			r.Get("/", deps.IMSessionHandler.List)
-			r.Get("/{id}", deps.IMSessionHandler.Get)
-			r.Post("/{id}/transfer", deps.IMSessionHandler.Transfer)
-			r.Post("/{id}/close", deps.IMSessionHandler.Close)
-			r.Get("/{id}/messages", deps.IMSessionHandler.ListMessages)
-			r.Post("/{id}/messages", deps.IMSessionHandler.SendMessage)
+		r.Route("/im", func(r chi.Router) {
+			r.Route("/channels", func(r chi.Router) {
+				r.Post("/", deps.IMChannelHandler.Create)
+				r.Get("/", deps.IMChannelHandler.List)
+				r.Put("/{id}", deps.IMChannelHandler.Update)
+			})
+			r.Route("/sessions", func(r chi.Router) {
+				r.Get("/", deps.IMSessionHandler.List)
+				r.Get("/{id}", deps.IMSessionHandler.Get)
+				r.Post("/{id}/transfer", deps.IMSessionHandler.Transfer)
+				r.Post("/{id}/close", deps.IMSessionHandler.Close)
+				r.Get("/{id}/messages", deps.IMSessionHandler.ListMessages)
+				r.Post("/{id}/messages", deps.IMSessionHandler.SendMessage)
+			})
 		})
 
 		r.Route("/im/ai-assist", func(r chi.Router) {
@@ -506,6 +540,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Post("/calls/{callId}/ai-post-actions", deps.AIAnalysisHandler.PostCallActions)
 		r.Post("/calls/{callId}/auto-fill-ticket", deps.AIAnalysisHandler.AutoFill)
 		r.Post("/calls/{callId}/script-recommendations", deps.AIAnalysisHandler.ScriptRecommend)
+		r.Get("/ai/script-recommend/{callId}", deps.AIAnalysisHandler.ScriptRecommend)
 		r.Post("/session-tag-analysis", deps.AIAnalysisHandler.BatchTags)
 		r.Post("/hotword-analysis", deps.AIAnalysisHandler.HotwordAnalysis)
 
@@ -565,11 +600,19 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Delete("/{id}", handler.DeleteVoiceProfile(deps.VoiceSvc))
 		})
 
+		// Frontend AI aliases
+		r.Route("/ai/voice-clone", func(r chi.Router) {
+			r.Get("/tasks", handler.ListVoiceProfiles(deps.VoiceSvc))
+			r.Post("/tasks", handler.CreateVoiceProfile(deps.VoiceSvc))
+			r.Get("/tasks/{id}", handler.GetVoiceProfile(deps.VoiceSvc))
+		})
+
 		r.Route("/conversation-analysis", func(r chi.Router) {
 			r.Get("/", handler.ListAnalysisTasks(deps.AnalysisSvc))
 			r.Post("/", handler.CreateAnalysisTask(deps.AnalysisSvc))
 			r.Get("/{id}", handler.GetAnalysisTask(deps.AnalysisSvc))
 		})
+		r.Post("/ai/conversation-analytics/analyze", handler.CreateAnalysisTask(deps.AnalysisSvc))
 
 		r.Route("/training/courses", func(r chi.Router) {
 			r.Get("/", handler.ListCourses(deps.TrainingSvc))
@@ -581,6 +624,9 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Get("/training/agents/{agentID}/exams", handler.ListExamsByAgent(deps.TrainingSvc))
 		r.Post("/training/simulated-calls", handler.CreateSimulatedCall(deps.TrainingSvc))
 		r.Get("/training/agents/{agentID}/simulated-calls", handler.ListSimulatedCalls(deps.TrainingSvc))
+		// Frontend AI training aliases
+		r.Post("/ai/training/generate-questions", handler.CreateCourse(deps.TrainingSvc))
+		r.Post("/ai/training/evaluate", handler.SubmitExam(deps.TrainingSvc))
 
 		r.Get("/ring-analysis/config", handler.GetRingAnalysisConfig(deps.RingSvc))
 		r.Put("/ring-analysis/config", handler.UpsertRingAnalysisConfig(deps.RingSvc))
@@ -633,11 +679,11 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		})
 
 		// --- Social Channel Config ---
-		r.Route("/social-configs", func(r chi.Router) {
+		r.Route("/social-channels", func(r chi.Router) {
 			r.Post("/", deps.SocialChannelHandler.CreateConfig)
 			r.Get("/", deps.SocialChannelHandler.ListConfigs)
-			r.Get("/channels/{channelID}", deps.SocialChannelHandler.GetConfig)
-			r.Put("/channels/{channelID}", deps.SocialChannelHandler.UpdateConfig)
+			r.Get("/{channelID}", deps.SocialChannelHandler.GetConfig)
+			r.Put("/{channelID}", deps.SocialChannelHandler.UpdateConfig)
 			r.Delete("/{id}", deps.SocialChannelHandler.DeleteConfig)
 		})
 	})
@@ -646,6 +692,13 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	r.Route("/api/v1/widget", func(r chi.Router) {
 		r.Post("/sessions", deps.WidgetHandler.CreateSession)
+		r.Post("/sessions/{id}/messages", deps.WidgetHandler.SendMessage)
+	})
+
+	// Webchat alias (frontend uses /api/v1/webchat/sessions)
+	r.Route("/api/v1/webchat", func(r chi.Router) {
+		r.Post("/sessions", deps.WidgetHandler.CreateSession)
+		r.Get("/sessions/{id}/messages", deps.WidgetHandler.SendMessage)
 		r.Post("/sessions/{id}/messages", deps.WidgetHandler.SendMessage)
 	})
 

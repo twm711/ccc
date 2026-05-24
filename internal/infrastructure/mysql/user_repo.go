@@ -50,6 +50,16 @@ func (r *UserRepo) Update(ctx context.Context, u *identity.User) error {
 	return err
 }
 
+func (r *UserRepo) FindByUsernameGlobal(ctx context.Context, username string) (*identity.User, error) {
+	var u identity.User
+	err := r.db.GetContext(ctx, &u,
+		`SELECT id, tenant_id, user_name AS username, display_name, email, phone, role, status, COALESCE(password_hash,'') AS password_hash, created_at, updated_at FROM users WHERE user_name = ? AND status != 'deleted' LIMIT 1`, username)
+	if err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 func (r *UserRepo) List(ctx context.Context, tenantID int64, offset, limit int) ([]*identity.User, int64, error) {
 	var total int64
 	err := r.db.GetContext(ctx, &total, `SELECT COUNT(*) FROM users WHERE tenant_id = ? AND status != 'deleted'`, tenantID)

@@ -128,6 +128,17 @@ func (r *MockUserRepo) Update(_ context.Context, u *User) error {
 	return nil
 }
 
+func (r *MockUserRepo) FindByUsernameGlobal(_ context.Context, username string) (*User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, u := range r.users {
+		if u.Username == username {
+			return u, nil
+		}
+	}
+	return nil, nil
+}
+
 func (r *MockUserRepo) List(_ context.Context, tenantID int64, offset, limit int) ([]*User, int64, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

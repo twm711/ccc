@@ -19,6 +19,7 @@ type UserRepository interface {
 	Create(ctx context.Context, u *User) error
 	GetByID(ctx context.Context, id int64) (*User, error)
 	GetByUsername(ctx context.Context, tenantID int64, username string) (*User, error)
+	FindByUsernameGlobal(ctx context.Context, username string) (*User, error)
 	Update(ctx context.Context, u *User) error
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*User, int64, error)
 }

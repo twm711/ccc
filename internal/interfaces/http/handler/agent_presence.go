@@ -113,6 +113,34 @@ func (h *AgentPresenceHandler) SwitchWorkMode(w http.ResponseWriter, r *http.Req
 	response.JSON(w, http.StatusOK, p)
 }
 
+func (h *AgentPresenceHandler) ListByTenant(w http.ResponseWriter, r *http.Request) {
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	list, err := h.svc.ListByTenant(r.Context(), tenantID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, list)
+}
+
+func (h *AgentPresenceHandler) ChangeStatus(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Status string `json:"status"`
+		Reason string `json:"reason,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	agentID, _ := strconv.ParseInt(r.URL.Query().Get("agent_id"), 10, 64)
+	p, err := h.svc.TransitionTo(r.Context(), agentID, identity.AgentPresenceStatus(in.Status))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, p)
+}
+
 func (h *AgentPresenceHandler) GetPresence(w http.ResponseWriter, r *http.Request) {
 	agentID, _ := strconv.ParseInt(chi.URLParam(r, "agentId"), 10, 64)
 	p, err := h.svc.GetPresence(r.Context(), agentID)

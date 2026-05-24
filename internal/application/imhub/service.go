@@ -1,11 +1,13 @@
 package imhub
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"sync"
 	"time"
 
+	"github.com/divord97/ccc/internal/domain/im"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -32,16 +34,23 @@ type Client struct {
 
 // Hub manages WebSocket connections for IM real-time messaging.
 type Hub struct {
+	imSvc   *im.IMService
 	logger  zerolog.Logger
 	mu      sync.RWMutex
 	clients map[int64]map[*Client]bool // sessionID -> clients
 }
 
-func NewHub(logger zerolog.Logger) *Hub {
+func NewHub(imSvc *im.IMService, logger zerolog.Logger) *Hub {
 	return &Hub{
+		imSvc:   imSvc,
 		logger:  logger,
 		clients: make(map[int64]map[*Client]bool),
 	}
+}
+
+// StartBroadcast keeps the hub alive; IM events are push-driven via Broadcast().
+func (h *Hub) StartBroadcast(ctx context.Context) {
+	<-ctx.Done()
 }
 
 func (h *Hub) Register(c *Client) {

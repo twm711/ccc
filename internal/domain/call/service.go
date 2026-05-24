@@ -420,6 +420,9 @@ func (s *CallService) AttendedTransfer(ctx context.Context, id int64, target Tra
 	if target.ExternalNum != "" {
 		detail += ":" + target.ExternalNum
 	}
+	if s.tp != nil {
+		_ = s.tp.Transfer(ctx, fmt.Sprintf("%d", c.ID), detail)
+	}
 
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err

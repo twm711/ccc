@@ -53,9 +53,10 @@ type User struct {
 	Phone       string     `db:"phone" json:"phone"`
 	Role        UserRole   `db:"role" json:"role"`
 	Status      UserStatus `db:"status" json:"status"`
-	ExternalUID string     `db:"external_uid" json:"external_uid,omitempty"`
-	CreatedAt   time.Time  `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time  `db:"updated_at" json:"updated_at"`
+	ExternalUID  string     `db:"external_uid" json:"external_uid,omitempty"`
+	PasswordHash string     `db:"password_hash" json:"-"`
+	CreatedAt    time.Time  `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time  `db:"updated_at" json:"updated_at"`
 }
 
 type WorkMode string
