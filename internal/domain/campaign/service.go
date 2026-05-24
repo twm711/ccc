@@ -104,7 +104,7 @@ func (s *CampaignService) Start(ctx context.Context, id int64) (*Campaign, error
 	if err != nil {
 		return nil, err
 	}
-	if pending == 0 && c.TotalCases == 0 {
+	if pending == 0 {
 		return nil, ErrCampaignNoCases
 	}
 

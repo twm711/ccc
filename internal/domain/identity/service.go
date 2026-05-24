@@ -339,7 +339,7 @@ var validTransitions = map[AgentPresenceStatus][]AgentPresenceStatus{
 	PresenceOffline: {PresenceOnline},
 	PresenceOnline:  {PresenceIdle, PresenceOffline},
 	PresenceIdle:    {PresenceDialing, PresenceTalking, PresenceBreak, PresenceOffline},
-	PresenceDialing: {PresenceTalking, PresenceACW, PresenceIdle},
+	PresenceDialing: {PresenceTalking, PresenceACW, PresenceIdle, PresenceOffline},
 	PresenceTalking: {PresenceACW, PresenceIdle, PresenceOffline},
 	PresenceACW:     {PresenceIdle, PresenceOffline},
 	PresenceBreak:   {PresenceIdle, PresenceOffline},

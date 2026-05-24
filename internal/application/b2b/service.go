@@ -27,9 +27,11 @@ func NewService(calls call.CallRepository, events call.CallEventRepository, eslC
 func (s *Service) Back2BackCall(ctx context.Context, tenantID int64, callerNumber, calleeNumber, gateway string) (*call.Call, error) {
 	now := time.Now()
 	c := &call.Call{
-		ID:       snowflake.NextID(),
-		TenantID: tenantID,
+		ID:        snowflake.NextID(),
+		TenantID:  tenantID,
 		CallType:  call.CallTypeDoubleCall,
+		Direction: call.DirectionOutbound,
+		MediaType: call.MediaTypeAudio,
 		Caller:    callerNumber,
 		Callee:    calleeNumber,
 		Status:    call.CallStatusRinging,
@@ -62,6 +64,8 @@ func (s *Service) EncryptedCall(ctx context.Context, tenantID int64, callerNumbe
 		ID:        snowflake.NextID(),
 		TenantID:  tenantID,
 		CallType:  call.CallTypeDoubleCall,
+		Direction: call.DirectionOutbound,
+		MediaType: call.MediaTypeAudio,
 		Caller:    callerNumber,
 		Callee:    intermediateNumber, // agent sees intermediate number
 		Status:    call.CallStatusRinging,
