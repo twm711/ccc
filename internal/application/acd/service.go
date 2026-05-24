@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/divord97/ccc/internal/application/lifecycle"
@@ -122,8 +123,9 @@ func (s *Service) Enqueue(ctx context.Context, callID, skillGroupID int64, prior
 	if s.rdb == nil {
 		return errors.New("acd: redis client not configured")
 	}
-	score := scoreFor(priority, time.Now())
-	if err := s.rdb.ZAdd(ctx, queueKey(skillGroupID), redis.Z{Score: score, Member: strconv.FormatInt(callID, 10)}).Err(); err != nil {
+	now := time.Now()
+	score := scoreFor(priority, now)
+	if err := s.rdb.ZAdd(ctx, queueKey(skillGroupID), redis.Z{Score: score, Member: memberFor(callID, now)}).Err(); err != nil {
 		return fmt.Errorf("acd: enqueue zadd: %w", err)
 	}
 	if err := s.rdb.SAdd(ctx, activeSGKey, skillGroupID).Err(); err != nil {
@@ -170,28 +172,36 @@ func (s *Service) tick(ctx context.Context) {
 // expireQueued drains calls whose wait time has exceeded the skill group
 // max_wait_sec setting, marking them abandoned via lifecycle.EndCall so that
 // post-call hooks (recording, webhook, etc.) still run.
+//
+// Enqueue time is read from the member string (memberFor format), not the
+// score: the score mixes priority + timestamp in a way that cannot be cleanly
+// decoded for arbitrary priority magnitudes, so we keep wall-clock time
+// authoritative by embedding it in the member.
 func (s *Service) expireQueued(ctx context.Context, sgID int64) {
 	sg, err := s.skillGroup.GetByID(ctx, sgID)
 	if err != nil || sg == nil || sg.MaxWaitSec <= 0 {
 		return
 	}
-	entries, err := s.rdb.ZRangeWithScores(ctx, queueKey(sgID), 0, -1).Result()
+	entries, err := s.rdb.ZRange(ctx, queueKey(sgID), 0, -1).Result()
 	if err != nil {
 		return
 	}
 	deadline := time.Now().Add(-time.Duration(sg.MaxWaitSec) * time.Second).UnixMilli()
-	for _, entry := range entries {
-		enqueuedAt, _ := tsFromScore(entry.Score)
+	for _, member := range entries {
+		callID, enqueuedAt, ok := parseMember(member)
+		if !ok {
+			// Malformed entry; drop it so it doesn't wedge the queue.
+			_ = s.rdb.ZRem(ctx, queueKey(sgID), member).Err()
+			continue
+		}
+		if enqueuedAt == 0 {
+			// Legacy member with no timestamp; age unknown — leave for dispatcher.
+			continue
+		}
 		if enqueuedAt > deadline {
 			continue
 		}
-		callIDStr, _ := entry.Member.(string)
-		callID, err := strconv.ParseInt(callIDStr, 10, 64)
-		if err != nil {
-			_ = s.rdb.ZRem(ctx, queueKey(sgID), entry.Member).Err()
-			continue
-		}
-		removed, err := s.rdb.ZRem(ctx, queueKey(sgID), callIDStr).Result()
+		removed, err := s.rdb.ZRem(ctx, queueKey(sgID), member).Result()
 		if err != nil || removed == 0 {
 			continue
 		}
@@ -203,15 +213,6 @@ func (s *Service) expireQueued(ctx context.Context, sgID int64) {
 	}
 }
 
-// tsFromScore extracts the enqueue timestamp (ms since epoch) from the score
-// encoded by scoreFor; the priority window must be subtracted first.
-func tsFromScore(score float64) (int64, int) {
-	// Priority window from scoreFor is -1e10 per priority point.
-	priority := int(-score / 1e10)
-	ts := int64(score - float64(-priority)*1e10)
-	return ts, priority
-}
-
 // dispatchOne attempts to assign the head-of-queue call for a skill group to an
 // idle agent. At most one assignment per tick per skill group to keep the loop
 // fair across groups.
@@ -220,9 +221,9 @@ func (s *Service) dispatchOne(ctx context.Context, sgID int64) {
 	if err != nil || len(head) == 0 {
 		return
 	}
-	callIDStr, _ := head[0].Member.(string)
-	callID, err := strconv.ParseInt(callIDStr, 10, 64)
-	if err != nil {
+	member, _ := head[0].Member.(string)
+	callID, _, ok := parseMember(member)
+	if !ok {
 		_ = s.rdb.ZRem(ctx, queueKey(sgID), head[0].Member).Err()
 		return
 	}
@@ -241,7 +242,7 @@ func (s *Service) dispatchOne(ctx context.Context, sgID int64) {
 		return
 	}
 
-	removed, err := s.rdb.ZRem(ctx, queueKey(sgID), callIDStr).Result()
+	removed, err := s.rdb.ZRem(ctx, queueKey(sgID), member).Result()
 	if err != nil || removed == 0 {
 		s.releaseClaim(ctx, agentID)
 		return
@@ -250,8 +251,9 @@ func (s *Service) dispatchOne(ctx context.Context, sgID int64) {
 	if _, err := s.lifecycle.TransitionCallToRinging(ctx, callID, agentID); err != nil {
 		s.logger.Warn().Err(err).Int64("call_id", callID).Int64("agent_id", agentID).Msg("acd: transition to ringing failed")
 		s.releaseClaim(ctx, agentID)
-		// best-effort requeue so the call is not lost
-		_ = s.rdb.ZAdd(ctx, queueKey(sgID), redis.Z{Score: scoreFor(0, time.Now()), Member: callIDStr}).Err()
+		// Requeue with original score (preserves priority window + original
+		// enqueue timestamp) so a transient failure doesn't demote the call.
+		_ = s.rdb.ZAdd(ctx, queueKey(sgID), redis.Z{Score: head[0].Score, Member: member}).Err()
 		return
 	}
 	s.logger.Info().Int64("call_id", callID).Int64("agent_id", agentID).Int64("sg", sgID).Msg("acd: routed call to agent")
@@ -359,6 +361,44 @@ func queueKey(sgID int64) string { return queueKeyPrefix + strconv.FormatInt(sgI
 // scoreFor encodes priority + timestamp into a single ZSet score so higher
 // priority always sorts before older entries with lower priority.
 func scoreFor(priority int, ts time.Time) float64 {
-	// Priority window: -1e6 per priority point, then +seconds since epoch.
+	// Priority window: -1e10 per priority point, then +ms since epoch.
+	// Note: this is one-way; do NOT try to decode priority/timestamp from the
+	// score — the window (1e10) is smaller than current ms-since-epoch
+	// (~1.78e12), so dividing the score by the window produces nonsense.
+	// Timestamps are stored authoritatively in the member string (memberFor).
 	return float64(-priority)*1e10 + float64(ts.UnixMilli())
+}
+
+// memberFor encodes the queue member as "<callID>:<enqueueMs>" so the
+// dispatcher and expireQueued can recover the enqueue time without trying to
+// decode it from the score.
+func memberFor(callID int64, enqueuedAt time.Time) string {
+	return strconv.FormatInt(callID, 10) + ":" + strconv.FormatInt(enqueuedAt.UnixMilli(), 10)
+}
+
+// parseMember parses a queue member produced by memberFor.
+//
+//   - ok=true with enqueueMs>0: new-format entry, age known.
+//   - ok=true with enqueueMs==0: legacy entry (bare call ID, no ':' suffix);
+//     the call ID is usable but the age is unknown, so expireQueued should
+//     skip it and let the dispatcher drain it normally.
+//   - ok=false: malformed (cannot recover a call ID); the caller should ZREM.
+func parseMember(member string) (callID int64, enqueueMs int64, ok bool) {
+	i := strings.IndexByte(member, ':')
+	if i < 0 {
+		id, err := strconv.ParseInt(member, 10, 64)
+		if err != nil {
+			return 0, 0, false
+		}
+		return id, 0, true
+	}
+	id, err := strconv.ParseInt(member[:i], 10, 64)
+	if err != nil {
+		return 0, 0, false
+	}
+	ms, err := strconv.ParseInt(member[i+1:], 10, 64)
+	if err != nil {
+		return id, 0, false
+	}
+	return id, ms, true
 }
