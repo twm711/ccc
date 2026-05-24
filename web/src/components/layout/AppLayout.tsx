@@ -98,6 +98,7 @@ const menuItems: MenuProps['items'] = [
       { key: '/reports/internal', label: '内部呼叫' },
       { key: '/reports/status-log', label: '状态日志' },
       { key: '/reports/csat', label: '满意度' },
+      { key: '/reports/campaigns', label: '活动报表' },
     ],
   },
   {

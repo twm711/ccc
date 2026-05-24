@@ -65,19 +65,33 @@ export const callApi = {
   list: (params?: Record<string, unknown>) => api.get('/calls', { params }),
   get: (id: number) => api.get(`/calls/${id}`),
   dial: (data: Record<string, unknown>) => api.post('/calls/dial', data),
+  internalDial: (data: Record<string, unknown>) => api.post('/calls/internal-dial', data),
+  getEvents: (id: number) => api.get(`/calls/${id}/events`),
+  getIvrTracking: (id: number) => api.get(`/calls/${id}/ivr-tracking`),
 };
 
 export const callControlApi = {
+  answer: (id: number) => api.post(`/calls/${id}/answer`),
+  end: (id: number) => api.post(`/calls/${id}/end`),
   hold: (id: number) => api.post(`/calls/${id}/hold`),
   retrieve: (id: number) => api.post(`/calls/${id}/retrieve`),
+  sendDTMF: (id: number, data: Record<string, unknown>) => api.post(`/calls/${id}/dtmf`, data),
   blindTransfer: (id: number, data: Record<string, unknown>) => api.post(`/calls/${id}/blind-transfer`, data),
   attendedTransfer: (id: number, data: Record<string, unknown>) => api.post(`/calls/${id}/attended-transfer`, data),
+  consult: (id: number, data: Record<string, unknown>) => api.post(`/calls/${id}/consult`, data),
+  consultTransfer: (id: number) => api.post(`/calls/${id}/consult-transfer`),
+  consultCancel: (id: number) => api.post(`/calls/${id}/consult-cancel`),
   conference: (id: number) => api.post(`/calls/${id}/conference`),
-  monitor: (id: number) => api.post(`/calls/${id}/monitor`),
-  whisper: (id: number) => api.post(`/calls/${id}/whisper`),
-  barge: (id: number) => api.post(`/calls/${id}/barge`),
-  intercept: (id: number) => api.post(`/calls/${id}/intercept`),
-  coach: (id: number) => api.post(`/calls/${id}/coach`),
+  disposition: (id: number, data: Record<string, unknown>) => api.post(`/calls/${id}/disposition`, data),
+  monitor: (id: number, data?: Record<string, unknown>) => api.post(`/calls/${id}/monitor`, data),
+  whisper: (id: number, data?: Record<string, unknown>) => api.post(`/calls/${id}/whisper`, data),
+  barge: (id: number, data?: Record<string, unknown>) => api.post(`/calls/${id}/barge`, data),
+  intercept: (id: number, data?: Record<string, unknown>) => api.post(`/calls/${id}/intercept`, data),
+  coach: (id: number, data?: Record<string, unknown>) => api.post(`/calls/${id}/coach`, data),
+  inbound: (data: Record<string, unknown>) => api.post('/calls/inbound', data),
+  back2back: (data: Record<string, unknown>) => api.post('/calls/back2back', data),
+  encrypted: (data: Record<string, unknown>) => api.post('/calls/encrypted', data),
+  requestCallback: (data: Record<string, unknown>) => api.post('/callbacks', data),
 };
 
 // --- Campaign BC ---
@@ -183,8 +197,22 @@ export const reportApi = {
   b2b: (params?: Record<string, unknown>) => api.get('/reports/back2back', { params }),
   internal: (params?: Record<string, unknown>) => api.get('/reports/internal-calls', { params }),
   statusLog: (params?: Record<string, unknown>) => api.get('/reports/agent-status-log', { params }),
+  campaigns: (params?: Record<string, unknown>) => api.get('/reports/campaigns', { params }),
   exportAgents: (params?: Record<string, unknown>) => api.get('/reports/agents/export', { params, responseType: 'blob' }),
   exportSkillGroups: (params?: Record<string, unknown>) => api.get('/reports/skill-groups/export', { params, responseType: 'blob' }),
+};
+
+// --- Recording BC ---
+export const recordingApi = {
+  list: (params?: Record<string, unknown>) => api.get('/recordings', { params }),
+  get: (id: number) => api.get(`/recordings/${id}`),
+  stream: (id: number) => `/api/v1/recordings/${id}/stream`,
+  download: (id: number) => `/api/v1/recordings/${id}/download`,
+};
+
+// --- Flash SMS ---
+export const flashSmsApi = {
+  send: (data: Record<string, unknown>) => api.post('/flash-sms', data),
 };
 
 // --- Annotation (Phase 10) ---

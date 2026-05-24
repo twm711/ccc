@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Badge, Button, Dropdown, Space, Tag, Tooltip, message } from 'antd';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Badge, Button, Dropdown, Input, Modal, Popover, Select, Space, Tag, Tooltip, message } from 'antd';
 import {
   PhoneOutlined, PhoneFilled, PauseCircleOutlined, SwapOutlined,
   TeamOutlined, AudioOutlined, AudioMutedOutlined, ClockCircleOutlined,
   CoffeeOutlined, CheckCircleOutlined, PoweroffOutlined,
+  NumberOutlined, FormOutlined,
 } from '@ant-design/icons';
 import type { MenuProps } from 'antd';
 import { callControlApi, agentPresenceApi } from '../../api/endpoints';
@@ -35,6 +36,11 @@ export default function AgentPhoneBar() {
   const [held, setHeld] = useState(false);
   const [duration, setDuration] = useState(0);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [acwCallId, setAcwCallId] = useState<number | null>(null);
+  const callIdRef = useRef<number | null>(null);
+
+  // Keep ref in sync with state so WebSocket handler can read current callId
+  useEffect(() => { callIdRef.current = callId; }, [callId]);
 
   // WebSocket for real-time call events
   useEffect(() => {
@@ -55,6 +61,7 @@ export default function AgentPhoneBar() {
             setDuration(0);
             break;
           case 'call_ended':
+            setAcwCallId(callIdRef.current);
             setStatus('acw');
             setHeld(false);
             setMuted(false);
@@ -91,18 +98,39 @@ export default function AgentPhoneBar() {
   }, []);
 
   const handleAnswer = async () => {
-    setStatus('talking');
-    setDuration(0);
-    message.success('已接听');
+    if (!callId) return;
+    try {
+      await callControlApi.answer(callId);
+      setStatus('talking');
+      setDuration(0);
+      message.success('已接听');
+    } catch {
+      message.error('接听失败');
+    }
   };
 
   const handleHangup = async () => {
-    setStatus('acw');
-    setCallId(null);
-    setDuration(0);
-    setHeld(false);
-    setMuted(false);
-    message.info('通话结束');
+    if (!callId) return;
+    try {
+      await callControlApi.end(callId);
+      setStatus('acw');
+      setCallId(null);
+      setDuration(0);
+      setHeld(false);
+      setMuted(false);
+      message.info('通话结束');
+    } catch {
+      message.error('挂机失败');
+    }
+  };
+
+  const handleSendDTMF = async (digit: string) => {
+    if (!callId) return;
+    try {
+      await callControlApi.sendDTMF(callId, { digits: digit });
+    } catch {
+      message.error('DTMF发送失败');
+    }
   };
 
   const handleHold = async () => {
@@ -130,9 +158,20 @@ export default function AgentPhoneBar() {
     }
   };
 
-  const handleFinishAcw = () => {
-    setStatus('idle');
-    message.success('话后处理完成');
+  const [dispositionOpen, setDispositionOpen] = useState(false);
+  const [dispositionCode, setDispositionCode] = useState('');
+  const [dispositionNote, setDispositionNote] = useState('');
+
+  const handleFinishAcw = async () => {
+    if (acwCallId && dispositionCode) {
+      try {
+        await callControlApi.disposition(acwCallId, { disposition_code: dispositionCode, note: dispositionNote });
+      } catch { /* best effort */ }
+    }
+    await changeStatus('idle');
+    setDispositionCode('');
+    setDispositionNote('');
+    setAcwCallId(null);
   };
 
   const breakMenu: MenuProps['items'] = breakReasons.map((r) => ({
@@ -184,18 +223,35 @@ export default function AgentPhoneBar() {
                 type={held ? 'primary' : 'default'}
               />
             </Tooltip>
+            <Popover
+              trigger="click"
+              content={
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 48px)', gap: 4 }}>
+                  {['1','2','3','4','5','6','7','8','9','*','0','#'].map((d) => (
+                    <Button key={d} size="small" onClick={() => handleSendDTMF(d)}>{d}</Button>
+                  ))}
+                </div>
+              }
+            >
+              <Tooltip title="DTMF">
+                <Button icon={<NumberOutlined />} />
+              </Tooltip>
+            </Popover>
             <Tooltip title="转接">
               <Button icon={<SwapOutlined />} onClick={() => setTransferOpen(true)} />
             </Tooltip>
             <Tooltip title="会议">
               <Button icon={<TeamOutlined />} onClick={handleConference} />
             </Tooltip>
-            <Button danger icon={<PhoneFilled />} onClick={handleHangup}>挂机</Button>
+            <Button danger icon={<PhoneFilled />} onClick={() => { setAcwCallId(callId); handleHangup(); }}>挂机</Button>
           </Space>
         )}
 
         {status === 'acw' && (
-          <Button type="primary" onClick={handleFinishAcw}>完成话后处理</Button>
+          <Space>
+            <Button icon={<FormOutlined />} onClick={() => setDispositionOpen(true)}>标记结果</Button>
+            <Button type="primary" onClick={handleFinishAcw}>完成话后处理</Button>
+          </Space>
         )}
 
         {/* Status controls */}
@@ -224,6 +280,43 @@ export default function AgentPhoneBar() {
         callId={callId}
         onClose={() => setTransferOpen(false)}
       />
+
+      <Modal
+        title="通话结果标记"
+        open={dispositionOpen}
+        onCancel={() => setDispositionOpen(false)}
+        onOk={() => setDispositionOpen(false)}
+        okText="确定"
+      >
+        <div style={{ marginBottom: 12 }}>
+          <label>结果代码</label>
+          <Select
+            value={dispositionCode || undefined}
+            onChange={setDispositionCode}
+            placeholder="选择通话结果"
+            style={{ width: '100%', marginTop: 4 }}
+            options={[
+              { value: 'resolved', label: '已解决' },
+              { value: 'follow_up', label: '需跟进' },
+              { value: 'escalated', label: '已升级' },
+              { value: 'no_answer', label: '未接听' },
+              { value: 'voicemail', label: '留言' },
+              { value: 'wrong_number', label: '错号' },
+              { value: 'callback', label: '需回拨' },
+            ]}
+          />
+        </div>
+        <div>
+          <label>备注</label>
+          <Input.TextArea
+            value={dispositionNote}
+            onChange={(e) => setDispositionNote(e.target.value)}
+            rows={3}
+            placeholder="通话备注"
+            style={{ marginTop: 4 }}
+          />
+        </div>
+      </Modal>
     </>
   );
 }
