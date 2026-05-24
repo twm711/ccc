@@ -272,12 +272,13 @@ func (h *SubFlowHandler) Handle(ctx context.Context, sess *Session, node routing
 	}
 
 	subSess := &Session{
-		CallID:    sess.CallID,
-		TenantID:  sess.TenantID,
-		FlowID:    flowID,
-		CallUUID:  sess.CallUUID,
-		ESL:       sess.ESL,
-		Variables: make(map[string]string),
+		CallID:      sess.CallID,
+		TenantID:    sess.TenantID,
+		FlowID:      flowID,
+		CallUUID:    sess.CallUUID,
+		ESL:         sess.ESL,
+		ASRProvider: sess.ASRProvider,
+		Variables:   make(map[string]string),
 	}
 	for k, v := range sess.Variables {
 		subSess.Variables[k] = v

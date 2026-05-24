@@ -92,6 +92,7 @@ func (s *Service) HandleConversationTurn(ctx context.Context, tenantID, commAgen
 
 	if err := s.commAgentSvc.AddTurn(ctx, sess, userMessage, reply, agent.MaxTurns); err != nil {
 		if err == ai.ErrSessionMaxTurns {
+			sess.Transcript += "User: " + userMessage + "\nAI: " + reply + "\n"
 			_ = s.commAgentSvc.EndSession(ctx, sess, ai.AgentSessionCompleted, "max turns reached", nil)
 			return reply, true, &sess.ID, nil
 		}
