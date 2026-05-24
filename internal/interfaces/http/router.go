@@ -338,6 +338,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Post("/calls/{id}/barge", deps.CallControlHandler.Barge)
 		r.Post("/calls/{id}/intercept", deps.CallControlHandler.InterceptCall)
 		r.Post("/calls/{id}/coach", deps.CallControlHandler.Coach)
+		r.Post("/calls/{id}/end", deps.CallControlHandler.EndCall)
+		r.Post("/calls/{id}/answer", deps.CallControlHandler.AnswerCall)
 
 		r.Route("/me", func(r chi.Router) {
 			r.Get("/overview", deps.ProfileHandler.Overview)

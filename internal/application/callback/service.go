@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/rs/zerolog"
 )
@@ -12,11 +13,12 @@ import (
 type Scheduler struct {
 	callbackRepo call.CallbackRequestRepository
 	callSvc      *call.CallService
+	outboundSvc  *outbound.Service
 	logger       zerolog.Logger
 }
 
-func NewScheduler(cbRepo call.CallbackRequestRepository, callSvc *call.CallService, logger zerolog.Logger) *Scheduler {
-	return &Scheduler{callbackRepo: cbRepo, callSvc: callSvc, logger: logger}
+func NewScheduler(cbRepo call.CallbackRequestRepository, callSvc *call.CallService, outboundSvc *outbound.Service, logger zerolog.Logger) *Scheduler {
+	return &Scheduler{callbackRepo: cbRepo, callSvc: callSvc, outboundSvc: outboundSvc, logger: logger}
 }
 
 // ProcessPending finds pending callbacks and attempts them.
@@ -44,13 +46,22 @@ func (s *Scheduler) ProcessPending(ctx context.Context, tenantID int64) (int, er
 			continue
 		}
 
-		_, err := s.callSvc.CreateOutboundCall(ctx, call.CreateCallInput{
-			TenantID:  cb.TenantID,
-			Caller:    "callback",
-			Callee:    cb.Caller,
-			CallType:  call.CallTypeCallback,
-			Direction: call.DirectionOutbound,
-		})
+		var err error
+		if s.outboundSvc != nil {
+			_, err = s.outboundSvc.Dial(ctx, outbound.DialRequest{
+				TenantID: cb.TenantID,
+				Callee:   cb.Caller,
+				MediaType: call.MediaTypeAudio,
+			})
+		} else {
+			_, err = s.callSvc.CreateOutboundCall(ctx, call.CreateCallInput{
+				TenantID:  cb.TenantID,
+				Caller:    "callback",
+				Callee:    cb.Caller,
+				CallType:  call.CallTypeCallback,
+				Direction: call.DirectionOutbound,
+			})
+		}
 
 		now := time.Now()
 		cb.AttemptCount++

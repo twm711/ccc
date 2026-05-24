@@ -11,7 +11,10 @@ import (
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/application/email"
 	"github.com/divord97/ccc/internal/application/imassist"
+	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/application/outbound"
+	"github.com/divord97/ccc/internal/application/screenpop"
+	"github.com/divord97/ccc/internal/application/webhook"
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/ai"
 	"github.com/divord97/ccc/internal/domain/call"
@@ -96,6 +99,7 @@ func main() {
 	agentPresenceRepo := infraMySQL.NewAgentPresenceRepo(db)
 	agentPresenceLogRepo := infraMySQL.NewAgentPresenceLogRepo(db)
 	webhookConfigRepo := infraMySQL.NewWebhookConfigRepo(db)
+	webhookLogRepo := infraMySQL.NewWebhookDeliveryLogRepo(db)
 	screenPopConfigRepo := infraMySQL.NewScreenPopConfigRepo(db)
 	quickReplyRepo := infraMySQL.NewQuickReplyRepo(db)
 	smsConfigRepo := infraMySQL.NewSmsConfigRepo(db)
@@ -192,6 +196,9 @@ func main() {
 	dialerSvc := dialer.NewService(campaignSvc, nil, logger)
 	b2bSvc := b2b.NewService(callRepo, callEventRepo, nil, logger)
 	_ = callbackRepo // used via callSvc
+	screenPopSvc := screenpop.NewService(screenPopConfigRepo, customerSvc)
+	webhookSvc := webhook.NewService(webhookConfigRepo, webhookLogRepo, logger)
+	lifecycleSvc := lifecycle.NewService(callSvc, agentPresenceSvc, csatSvc, webhookSvc, customerSvc, screenPopSvc)
 	emailSvc := email.NewService(imSvc, logger)
 	// LLM Provider: use DashScope when API key configured, otherwise fallback to stub.
 	var llmProvider llm.Provider
@@ -270,7 +277,7 @@ func main() {
 	cliPolicyHandler := handler.NewCLIPolicyHandler(cliPolicyRepo)
 	dncHandler := handler.NewDNCHandler(dncSvc, dncRepo)
 	callHandler := handler.NewCallHandler(callSvc, outboundSvc, callTagSvc)
-	callControlHandler := handler.NewCallControlHandler(callSvc)
+	callControlHandler := handler.NewCallControlHandler(callSvc, lifecycleSvc)
 	agentPresenceHandler := handler.NewAgentPresenceHandler(agentPresenceSvc)
 	webhookConfigHandler := handler.NewWebhookConfigHandler(webhookConfigRepo)
 	screenPopConfigHandler := handler.NewScreenPopConfigHandler(screenPopConfigRepo)
@@ -289,7 +296,7 @@ func main() {
 	agentScriptHandler := handler.NewAgentScriptHandler(agentScriptSvc)
 	sessionInfoHandler := handler.NewSessionInfoHandler(sessionInfoSvc)
 	imChannelHandler := handler.NewIMChannelHandler(imSvc)
-	imSessionHandler := handler.NewIMSessionHandler(imSvc)
+	imSessionHandler := handler.NewIMSessionHandler(imSvc, customerSvc, webhookSvc)
 	widgetHandler := handler.NewWidgetHandler(imSvc)
 	emailInboundHandler := handler.NewEmailInboundHandler(emailSvc)
 	imAssistHandler := handler.NewIMAssistHandler(imAssistSvc)

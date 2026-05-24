@@ -246,6 +246,33 @@ func (s *CallService) CreateInternalCall(ctx context.Context, in CreateCallInput
 	return c, nil
 }
 
+// AnswerCall marks a call as answered by an agent.
+func (s *CallService) AnswerCall(ctx context.Context, id int64, agentUserID int64) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusRinging && c.Status != CallStatusIVR {
+		return nil, ErrCallNotActive
+	}
+
+	now := time.Now()
+	c.Status = CallStatusActive
+	c.AnsweredAt = &now
+	c.AgentUserID = &agentUserID
+	c.WaitDurationSec = int(now.Sub(c.StartedAt).Seconds())
+
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "call_answered", Detail: fmt.Sprintf("agent_%d", agentUserID), CreatedAt: now,
+	})
+	return c, nil
+}
+
 func (s *CallService) GetByID(ctx context.Context, id int64) (*Call, error) {
 	return s.calls.GetByID(ctx, id)
 }

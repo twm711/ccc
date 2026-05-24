@@ -173,22 +173,25 @@ func (s *IMService) TransferSession(ctx context.Context, sessionID int64, toAgen
 	return s.sessions.Update(ctx, sess)
 }
 
-func (s *IMService) CloseSession(ctx context.Context, sessionID int64) error {
+func (s *IMService) CloseSession(ctx context.Context, sessionID int64) (*IMSession, error) {
 	sess, err := s.sessions.GetByID(ctx, sessionID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if sess == nil {
-		return ErrSessionNotFound
+		return nil, ErrSessionNotFound
 	}
 	if sess.Status == SessionStatusClosed {
-		return ErrSessionClosed
+		return nil, ErrSessionClosed
 	}
 
 	now := time.Now()
 	sess.Status = SessionStatusClosed
 	sess.EndAt = &now
-	return s.sessions.Update(ctx, sess)
+	if err := s.sessions.Update(ctx, sess); err != nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 func (s *IMService) GetSession(ctx context.Context, id int64) (*IMSession, error) {
@@ -227,6 +230,7 @@ func (s *IMService) SendMessage(ctx context.Context, sessionID int64, senderType
 	}
 
 	msg := &IMMessage{
+		ID:          snowflake.NextID(),
 		SessionID:   sessionID,
 		SenderType:  senderType,
 		SenderID:    senderID,

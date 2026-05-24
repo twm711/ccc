@@ -11,11 +11,15 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// DialFunc is the function signature for placing an outbound campaign call.
+type DialFunc func(ctx context.Context, tenantID int64, callee string, campaignID, caseID int64) error
+
 // Service orchestrates outbound dialing for campaigns across 4 modes.
 type Service struct {
 	campaignSvc *campaign.CampaignService
 	esl         *esl.Client
 	logger      zerolog.Logger
+	dialFn      DialFunc
 
 	mu       sync.Mutex
 	active   map[int64]*dialerState // campaignID → state
@@ -31,12 +35,32 @@ type dialerState struct {
 }
 
 func NewService(campaignSvc *campaign.CampaignService, eslClient *esl.Client, logger zerolog.Logger) *Service {
-	return &Service{
+	s := &Service{
 		campaignSvc: campaignSvc,
 		esl:         eslClient,
 		logger:      logger,
 		active:      make(map[int64]*dialerState),
 	}
+	// default dial function: originate via ESL if available
+	s.dialFn = s.eslDial
+	return s
+}
+
+// SetDialFunc allows injecting a custom dial function (e.g. outbound.Service.Dial).
+func (s *Service) SetDialFunc(fn DialFunc) {
+	s.dialFn = fn
+}
+
+func (s *Service) eslDial(ctx context.Context, tenantID int64, callee string, campaignID, caseID int64) error {
+	if s.esl == nil {
+		s.logger.Debug().Int64("campaign_id", campaignID).Str("phone", callee).Msg("dialer: ESL not configured, skip")
+		return nil
+	}
+	_, err := s.esl.Originate(ctx, fmt.Sprintf("sofia/gateway/campaign_%d/%s", campaignID, callee), callee, "campaign")
+	if err != nil {
+		s.logger.Error().Err(err).Int64("case_id", caseID).Str("phone", callee).Msg("dialer: ESL originate failed")
+	}
+	return err
 }
 
 // StartDialing begins the dialing loop for a campaign based on its mode.
@@ -170,6 +194,7 @@ func (s *Service) dialPredictive(ctx context.Context, c *campaign.Campaign, stat
 		state.totalDialed++
 		s.mu.Unlock()
 		s.logger.Debug().Int64("case_id", cs.ID).Str("phone", cs.PhoneNumber).Msg("predictive: dialing")
+		go s.dialCase(ctx, c, cs, state)
 	}
 }
 
@@ -191,6 +216,7 @@ func (s *Service) dialProgressive(ctx context.Context, c *campaign.Campaign, sta
 	state.totalDialed++
 	s.mu.Unlock()
 	s.logger.Debug().Int64("case_id", cs.ID).Str("phone", cs.PhoneNumber).Msg("progressive: dialing")
+	go s.dialCase(ctx, c, cs, state)
 }
 
 func (s *Service) dialPower(ctx context.Context, c *campaign.Campaign, state *dialerState) {
@@ -212,7 +238,15 @@ func (s *Service) dialPower(ctx context.Context, c *campaign.Campaign, state *di
 		state.totalDialed++
 		s.mu.Unlock()
 		s.logger.Debug().Int64("case_id", cs.ID).Str("phone", cs.PhoneNumber).Msg("power: dialing")
+		go s.dialCase(ctx, c, cs, state)
 	}
+}
+
+// dialCase places an actual call for a campaign case and records the result.
+func (s *Service) dialCase(ctx context.Context, c *campaign.Campaign, cs *campaign.CampaignCase, state *dialerState) {
+	err := s.dialFn(ctx, c.TenantID, cs.PhoneNumber, c.ID, cs.ID)
+	connected := err == nil
+	s.RecordCallResult(ctx, c.ID, cs.ID, connected, 0, "")
 }
 
 // PreviewAccept is called when an agent accepts a preview case and dials.

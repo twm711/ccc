@@ -114,7 +114,7 @@ func TestIMService_CloseSession(t *testing.T) {
 	sess, _ := svc.CreateSession(ctx, CreateSessionInput{TenantID: 1, ChannelID: ch.ID, VisitorID: "v1"})
 	_ = svc.AssignAgent(ctx, sess.ID, 200)
 
-	if err := svc.CloseSession(ctx, sess.ID); err != nil {
+	if _, err := svc.CloseSession(ctx, sess.ID); err != nil {
 		t.Fatalf("CloseSession: %v", err)
 	}
 	updated, _ := svc.GetSession(ctx, sess.ID)
@@ -126,7 +126,7 @@ func TestIMService_CloseSession(t *testing.T) {
 	}
 
 	// double close
-	if err := svc.CloseSession(ctx, sess.ID); err != ErrSessionClosed {
+	if _, err := svc.CloseSession(ctx, sess.ID); err != ErrSessionClosed {
 		t.Errorf("expected ErrSessionClosed, got %v", err)
 	}
 }
@@ -171,7 +171,7 @@ func TestIMService_SendMessage_Image(t *testing.T) {
 	}
 
 	// closed session rejects messages
-	_ = svc.CloseSession(ctx, sess.ID)
+	_, _ = svc.CloseSession(ctx, sess.ID)
 	_, err = svc.SendMessage(ctx, sess.ID, SenderTypeVisitor, "v1", ContentTypeText, "late msg")
 	if err != ErrSessionClosed {
 		t.Errorf("expected ErrSessionClosed, got %v", err)

@@ -255,6 +255,7 @@ func (s *CampaignService) MarkCaseCompleted(ctx context.Context, caseID int64, d
 			c.SuccessCases++
 		}
 		c.UpdatedAt = now
+		s.autoComplete(c, now)
 		_ = s.campaigns.Update(ctx, c)
 	}
 	return cs, nil
@@ -285,6 +286,7 @@ func (s *CampaignService) MarkCaseFailed(ctx context.Context, caseID int64) (*Ca
 			c.CompletedCases++
 			c.FailedCases++
 			c.UpdatedAt = now
+			s.autoComplete(c, now)
 			_ = s.campaigns.Update(ctx, c)
 		}
 	} else {
@@ -297,4 +299,11 @@ func (s *CampaignService) MarkCaseFailed(ctx context.Context, caseID int64) (*Ca
 		return nil, err
 	}
 	return cs, nil
+}
+
+func (s *CampaignService) autoComplete(c *Campaign, now time.Time) {
+	if c.Status == CampaignStatusRunning && c.TotalCases > 0 && c.CompletedCases >= c.TotalCases {
+		c.Status = CampaignStatusCompleted
+		c.CompletedAt = &now
+	}
 }

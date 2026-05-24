@@ -5,17 +5,19 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
 
 type CallControlHandler struct {
-	svc *call.CallService
+	svc       *call.CallService
+	lifecycle *lifecycle.Service
 }
 
-func NewCallControlHandler(svc *call.CallService) *CallControlHandler {
-	return &CallControlHandler{svc: svc}
+func NewCallControlHandler(svc *call.CallService, lc *lifecycle.Service) *CallControlHandler {
+	return &CallControlHandler{svc: svc, lifecycle: lc}
 }
 
 func (h *CallControlHandler) Hold(w http.ResponseWriter, r *http.Request) {
@@ -282,4 +284,38 @@ func (h *CallControlHandler) Coach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, c)
+}
+
+func (h *CallControlHandler) EndCall(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, err := h.lifecycle.EndCall(r.Context(), id, call.HangupReason(in.Reason))
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, c)
+}
+
+func (h *CallControlHandler) AnswerCall(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var in struct {
+		AgentUserID int64 `json:"agent_user_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	c, popData, err := h.lifecycle.AnswerCall(r.Context(), id, in.AgentUserID)
+	if err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response.JSON(w, http.StatusOK, map[string]interface{}{"call": c, "screen_pop": popData})
 }
