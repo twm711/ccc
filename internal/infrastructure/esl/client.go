@@ -391,6 +391,8 @@ func (c *Client) Close() {
 		return
 	}
 	// Drain pool and close TCP connections.
+	// Do NOT close the channel — Release() may still send after this returns.
+	// The channel will be GC'd when the Client is no longer referenced.
 	for {
 		select {
 		case cn := <-c.pool:
@@ -398,7 +400,6 @@ func (c *Client) Close() {
 				cn.tcpConn.Close()
 			}
 		default:
-			close(c.pool)
 			return
 		}
 	}
