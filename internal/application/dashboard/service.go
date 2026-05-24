@@ -4,12 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/report"
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
+
+var wsUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
 
 // Hub manages WebSocket connections and broadcasts dashboard updates.
 type Hub struct {
@@ -86,7 +94,46 @@ func (h *Hub) broadcastAll(ctx context.Context) {
 	}
 }
 
-// ServeWS upgrades the HTTP connection to WebSocket (placeholder — actual upgrade in handler).
-func (h *Hub) ServeWS(_ http.ResponseWriter, _ *http.Request) {
-	// WebSocket upgrade is handled in the HTTP handler layer.
+// ServeWS upgrades the HTTP connection to WebSocket and streams dashboard updates.
+func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	conn, err := wsUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("dashboard ws: upgrade failed")
+		return
+	}
+
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	if tenantID == 0 {
+		tenantID = 1
+	}
+
+	client := &Client{TenantID: tenantID, Send: make(chan []byte, 64)}
+	h.Register(client)
+
+	// Writer goroutine
+	go func() {
+		defer func() {
+			conn.Close()
+			h.Unregister(client)
+		}()
+		for msg := range client.Send {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Reader goroutine (keep connection alive, handle pings)
+	conn.SetReadLimit(512)
+	conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return nil
+	})
+	for {
+		_, _, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+	}
 }

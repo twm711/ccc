@@ -2,11 +2,12 @@ package ivr
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/divord97/ccc/internal/domain/routing"
 )
 
-// CollectDTMFHandler collects DTMF input from the caller.
+// CollectDTMFHandler collects DTMF input from the caller via ESL play_and_get_digits.
 type CollectDTMFHandler struct{}
 
 type collectDTMFConfig struct {
@@ -19,20 +20,86 @@ type collectDTMFConfig struct {
 	FailAudioID   string `json:"fail_audio_id"`
 }
 
-func (h *CollectDTMFHandler) Handle(_ context.Context, sess *Session, node routing.FlowNode) (string, error) {
+func (h *CollectDTMFHandler) Handle(ctx context.Context, sess *Session, node routing.FlowNode) (string, error) {
 	var cfg collectDTMFConfig
 	_ = parseConfig(node.Config, &cfg)
-	// In production: ESL play_and_get_digits command
-	// For now, simulate success with empty input
+
+	if cfg.MinDigits == 0 {
+		cfg.MinDigits = 1
+	}
+	if cfg.MaxDigits == 0 {
+		cfg.MaxDigits = cfg.MinDigits
+	}
+	if cfg.TimeoutSec == 0 {
+		cfg.TimeoutSec = 10
+	}
+	if cfg.TermChar == "" {
+		cfg.TermChar = "#"
+	}
+	if cfg.RetryCount == 0 {
+		cfg.RetryCount = 3
+	}
+
+	if sess.ESL != nil && sess.CallUUID != "" {
+		prompt := cfg.PromptAudioID
+		if prompt == "" {
+			prompt = "silence_stream://250"
+		}
+		failSound := cfg.FailAudioID
+		if failSound == "" {
+			failSound = "silence_stream://250"
+		}
+
+		cmd := fmt.Sprintf(
+			"play_and_get_digits %d %d %d %d %s %s %s dtmf_result \\d+",
+			cfg.MinDigits, cfg.MaxDigits, cfg.RetryCount,
+			cfg.TimeoutSec*1000, cfg.TermChar,
+			prompt, failSound,
+		)
+		resp, err := sess.ESL.SendCommand(ctx,
+			fmt.Sprintf("uuid_broadcast %s %s both", sess.CallUUID, cmd))
+		if err != nil {
+			sess.Variables["dtmf_input"] = ""
+			return "timeout", nil
+		}
+		sess.Variables["dtmf_input"] = resp
+		return "success", nil
+	}
+
 	sess.Variables["dtmf_input"] = ""
 	return "success", nil
 }
 
-// VoicemailHandler records a voicemail message.
+// VoicemailHandler records a voicemail message via ESL.
 type VoicemailHandler struct{}
 
-func (h *VoicemailHandler) Handle(_ context.Context, _ *Session, _ routing.FlowNode) (string, error) {
-	// In production: ESL record command → store file → create Voicemail entity
+type voicemailConfig struct {
+	MaxDurationSec int    `json:"max_duration_sec"`
+	BeepFile       string `json:"beep_file"`
+	StoragePath    string `json:"storage_path"`
+}
+
+func (h *VoicemailHandler) Handle(ctx context.Context, sess *Session, node routing.FlowNode) (string, error) {
+	var cfg voicemailConfig
+	_ = parseConfig(node.Config, &cfg)
+
+	if cfg.MaxDurationSec == 0 {
+		cfg.MaxDurationSec = 120
+	}
+	if cfg.StoragePath == "" {
+		cfg.StoragePath = fmt.Sprintf("/recordings/voicemail/%d_%d.wav", sess.TenantID, sess.CallID)
+	}
+
+	if sess.ESL != nil && sess.CallUUID != "" {
+		if cfg.BeepFile != "" {
+			_ = sess.ESL.PlayAudio(ctx, sess.CallUUID, cfg.BeepFile)
+		}
+		if err := sess.ESL.StartRecording(ctx, sess.CallUUID, cfg.StoragePath); err != nil {
+			sess.Variables["voicemail_error"] = err.Error()
+			return "error", nil
+		}
+		sess.Variables["voicemail_file"] = cfg.StoragePath
+	}
 	return "default", nil
 }
 
@@ -44,19 +111,68 @@ type csatConfig struct {
 	MaxRating     int    `json:"max_rating"`
 }
 
-func (h *SatisfactionRatingHandler) Handle(_ context.Context, sess *Session, node routing.FlowNode) (string, error) {
+func (h *SatisfactionRatingHandler) Handle(ctx context.Context, sess *Session, node routing.FlowNode) (string, error) {
 	var cfg csatConfig
 	_ = parseConfig(node.Config, &cfg)
-	// In production: collect single DTMF digit for rating
+
+	if cfg.MaxRating == 0 {
+		cfg.MaxRating = 5
+	}
+
+	if sess.ESL != nil && sess.CallUUID != "" {
+		prompt := cfg.PromptAudioID
+		if prompt == "" {
+			prompt = "silence_stream://250"
+		}
+		cmd := fmt.Sprintf(
+			"play_and_get_digits 1 1 3 5000 # %s silence_stream://250 csat_result [1-%d]",
+			prompt, cfg.MaxRating,
+		)
+		resp, err := sess.ESL.SendCommand(ctx,
+			fmt.Sprintf("uuid_broadcast %s %s both", sess.CallUUID, cmd))
+		if err != nil {
+			sess.Variables["csat_rating"] = ""
+			return "timeout", nil
+		}
+		sess.Variables["csat_rating"] = resp
+		return "success", nil
+	}
+
 	sess.Variables["csat_rating"] = ""
 	return "success", nil
 }
 
-// ASRHandler uses speech recognition for voice input (Phase 9 stub).
+// ASRHandler uses speech recognition for voice input.
 type ASRHandler struct{}
 
-func (h *ASRHandler) Handle(_ context.Context, sess *Session, _ routing.FlowNode) (string, error) {
-	// Stub: ASR integration deferred to Phase 9
+type asrConfig struct {
+	Language   string `json:"language"`
+	TimeoutMs int    `json:"timeout_ms"`
+	Grammar   string `json:"grammar"`
+}
+
+func (h *ASRHandler) Handle(ctx context.Context, sess *Session, node routing.FlowNode) (string, error) {
+	var cfg asrConfig
+	_ = parseConfig(node.Config, &cfg)
+
+	if cfg.TimeoutMs == 0 {
+		cfg.TimeoutMs = 10000
+	}
+	if cfg.Language == "" {
+		cfg.Language = "zh-CN"
+	}
+
+	if sess.ESL != nil && sess.CallUUID != "" {
+		cmd := fmt.Sprintf("uuid_record %s start /tmp/asr_%d.wav %d",
+			sess.CallUUID, sess.CallID, cfg.TimeoutMs/1000)
+		_, err := sess.ESL.SendCommand(ctx, cmd)
+		if err != nil {
+			sess.Variables["asr_result"] = ""
+			return "error", nil
+		}
+		sess.Variables["asr_audio_file"] = fmt.Sprintf("/tmp/asr_%d.wav", sess.CallID)
+	}
+
 	sess.Variables["asr_result"] = ""
 	return "success", nil
 }

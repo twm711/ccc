@@ -6,12 +6,20 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig
-	Database  DatabaseConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Snowflake SnowflakeConfig
-	Aliyun    AliyunConfig
+	Server      ServerConfig
+	Database    DatabaseConfig
+	Redis       RedisConfig
+	JWT         JWTConfig
+	Snowflake   SnowflakeConfig
+	Aliyun      AliyunConfig
+	FreeSWITCH  FreeSWITCHConfig
+}
+
+type FreeSWITCHConfig struct {
+	Host     string
+	Port     int
+	Password string
+	PoolSize int
 }
 
 type ServerConfig struct {
@@ -41,6 +49,10 @@ type AliyunConfig struct {
 	AccessKeyID     string
 	AccessKeySecret string
 	NLSAppKey       string
+	NLSToken        string
+	STTRegion       string
+	TTSVoice        string
+	TTSSampleRate   int
 	DashScopeAPIKey string
 	DashScopeModel  string
 }
@@ -65,12 +77,22 @@ func Load() *Config {
 		Snowflake: SnowflakeConfig{
 			NodeID: int64(envOrInt("SNOWFLAKE_NODE_ID", 1)),
 		},
+		FreeSWITCH: FreeSWITCHConfig{
+			Host:     envOr("FREESWITCH_HOST", ""),
+			Port:     envOrInt("FREESWITCH_PORT", 8021),
+			Password: envOr("FREESWITCH_PASSWORD", "ClueCon"),
+			PoolSize: envOrInt("FREESWITCH_POOL_SIZE", 5),
+		},
 		Aliyun: AliyunConfig{
-			AccessKeyID:     envOr("ALIYUN_ACCESS_KEY_ID", ""),
-			AccessKeySecret: envOr("ALIYUN_ACCESS_KEY_SECRET", ""),
-			NLSAppKey:       envOr("ALIYUN_NLS_APP_KEY", ""),
-			DashScopeAPIKey: envOr("DASHSCOPE_API_KEY", ""),
-			DashScopeModel:  envOr("DASHSCOPE_MODEL", "qwen-plus"),
+			AccessKeyID:     firstEnv("ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_ID"),
+			AccessKeySecret: firstEnv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "ALIBABA_ACCESS_KEY_SECRET", "ALIYUN_ACCESS_KEY_SECRET"),
+			NLSAppKey:       firstEnv("NLS_APP_KEY", "NLS_PROJECT_APP_KEY", "ALIBABA_STT_APPKEY", "ALIYUN_NLS_APP_KEY"),
+			NLSToken:        firstEnv("ALIBABA_STT_TOKEN", "ALIBABA_TTS_TOKEN"),
+			STTRegion:       envOr("ALIBABA_STT_REGION", "cn-shanghai"),
+			TTSVoice:        envOr("ALIBABA_TTS_VOICE", "zhixiaoxia"),
+			TTSSampleRate:   envOrInt("ALIBABA_TTS_SAMPLE_RATE", 16000),
+			DashScopeAPIKey: firstEnv("TONGYI_API_KEY", "DASHSCOPE_API_KEY"),
+			DashScopeModel:  firstEnvOr("qwen-plus", "TONGYI_MODEL", "DASHSCOPE_MODEL"),
 		},
 	}
 }
@@ -78,6 +100,24 @@ func Load() *Config {
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return fallback
+}
+
+func firstEnv(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func firstEnvOr(fallback string, keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
 	}
 	return fallback
 }

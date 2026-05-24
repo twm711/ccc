@@ -7,52 +7,49 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 )
 
-const (
-	nlsFileTransURL = "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/FlashRecognizer"
-)
-
-// AliyunASRProvider implements ASRProvider using Aliyun NLS (Intelligent Speech Interaction).
+// AliyunASRProvider implements ASRProvider using Aliyun NLS one-sentence recognition REST API.
 type AliyunASRProvider struct {
-	accessKeyID     string
-	accessKeySecret string
-	appKey          string
-	client          *http.Client
+	token  string
+	appKey string
+	region string
+	client *http.Client
 }
 
-func NewAliyunASRProvider(accessKeyID, accessKeySecret, appKey string) *AliyunASRProvider {
+func NewAliyunASRProvider(token, appKey, region string) *AliyunASRProvider {
+	if region == "" {
+		region = "cn-shanghai"
+	}
 	return &AliyunASRProvider{
-		accessKeyID:     accessKeyID,
-		accessKeySecret: accessKeySecret,
-		appKey:          appKey,
-		client:          &http.Client{Timeout: 120 * time.Second},
+		token:  token,
+		appKey: appKey,
+		region: region,
+		client: &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
-// Transcribe sends audio to Aliyun NLS for speech-to-text via the file transcription API.
+// Transcribe sends an audio URL to the Aliyun one-sentence recognition REST API.
 func (p *AliyunASRProvider) Transcribe(ctx context.Context, audioURL string) (string, error) {
-	token, err := p.getToken(ctx)
-	if err != nil {
-		return "", fmt.Errorf("asr: get token: %w", err)
-	}
+	endpoint := fmt.Sprintf("https://nls-gateway-%s.aliyuncs.com/stream/v1/asr", p.region)
 
-	taskReq := map[string]interface{}{
-		"appkey":          p.appKey,
-		"file_link":      audioURL,
-		"version":        "4.0",
-		"enable_words":   true,
-	}
-	body, _ := json.Marshal(taskReq)
+	params := url.Values{}
+	params.Set("appkey", p.appKey)
+	params.Set("format", "pcm")
+	params.Set("sample_rate", "16000")
+	params.Set("enable_punctuation_prediction", "true")
+	params.Set("enable_inverse_text_normalization", "true")
+	params.Set("audio_address", audioURL)
 
-	submitURL := "https://nls-gateway-cn-shanghai.aliyuncs.com/stream/v1/asr"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, submitURL, bytes.NewReader(body))
+	fullURL := endpoint + "?" + params.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("asr: create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-NLS-Token", token)
+	req.Header.Set("X-NLS-Token", p.token)
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -60,92 +57,76 @@ func (p *AliyunASRProvider) Transcribe(ctx context.Context, audioURL string) (st
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", fmt.Errorf("asr: read response: %w", err)
 	}
 
-	var result struct {
-		TaskID  string `json:"TaskId"`
-		Status  int    `json:"StatusCode"`
-		Message string `json:"StatusText"`
-		Result  struct {
-			Sentences []struct {
-				Text string `json:"Text"`
-			} `json:"Sentences"`
-		} `json:"Result"`
+	var result asrResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("asr: unmarshal: %w (body: %s)", err, string(body))
 	}
 
-	if err := json.Unmarshal(respBody, &result); err != nil {
-		return "", fmt.Errorf("asr: unmarshal: %w", err)
-	}
-
-	if result.Status != 200 && result.Status != 21050000 {
+	if result.Status != 20000000 {
 		return "", fmt.Errorf("asr: API error %d: %s", result.Status, result.Message)
 	}
 
-	var texts []string
-	for _, s := range result.Result.Sentences {
-		if s.Text != "" {
-			texts = append(texts, s.Text)
-		}
-	}
-	return joinTexts(texts), nil
+	return result.Result, nil
 }
 
-func joinTexts(texts []string) string {
-	if len(texts) == 0 {
-		return ""
+// TranscribeBytes sends raw audio bytes to the Aliyun one-sentence recognition REST API.
+func (p *AliyunASRProvider) TranscribeBytes(ctx context.Context, audio []byte, format string, sampleRate int) (string, error) {
+	endpoint := fmt.Sprintf("https://nls-gateway-%s.aliyuncs.com/stream/v1/asr", p.region)
+
+	if format == "" {
+		format = "pcm"
 	}
-	result := texts[0]
-	for i := 1; i < len(texts); i++ {
-		result += " " + texts[i]
+	if sampleRate == 0 {
+		sampleRate = 16000
 	}
-	return result
-}
 
-type nlsTokenResponse struct {
-	NlsRequestID string `json:"NlsRequestId"`
-	RequestID    string `json:"RequestId"`
-	Token        struct {
-		ID         string `json:"Id"`
-		ExpireTime int64  `json:"ExpireTime"`
-	} `json:"Token"`
-	ErrMsg string `json:"ErrMsg"`
-}
+	params := url.Values{}
+	params.Set("appkey", p.appKey)
+	params.Set("format", format)
+	params.Set("sample_rate", fmt.Sprintf("%d", sampleRate))
+	params.Set("enable_punctuation_prediction", "true")
+	params.Set("enable_inverse_text_normalization", "true")
 
-func (p *AliyunASRProvider) getToken(ctx context.Context) (string, error) {
-	tokenURL := "https://nls-meta.cn-shanghai.aliyuncs.com/pop/2018-05-18/tokens"
+	fullURL := endpoint + "?" + params.Encode()
 
-	reqBody := map[string]string{
-		"AccessKeyId":     p.accessKeyID,
-		"AccessKeySecret": p.accessKeySecret,
-	}
-	body, _ := json.Marshal(reqBody)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fullURL, bytes.NewReader(audio))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("asr: create request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-NLS-Token", p.token)
+	req.Header.Set("Content-Type", "application/octet-stream")
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("asr: http call: %w", err)
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("asr: read response: %w", err)
 	}
 
-	var tokenResp nlsTokenResponse
-	if err := json.Unmarshal(respBody, &tokenResp); err != nil {
-		return "", fmt.Errorf("asr: parse token response: %w", err)
+	var result asrResponse
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("asr: unmarshal: %w (body: %s)", err, string(body))
 	}
-	if tokenResp.Token.ID == "" {
-		return "", fmt.Errorf("asr: empty token: %s", tokenResp.ErrMsg)
+
+	if result.Status != 20000000 {
+		return "", fmt.Errorf("asr: API error %d: %s", result.Status, result.Message)
 	}
-	return tokenResp.Token.ID, nil
+
+	return result.Result, nil
+}
+
+type asrResponse struct {
+	TaskID  string `json:"task_id"`
+	Result  string `json:"result"`
+	Status  int    `json:"status"`
+	Message string `json:"message"`
 }

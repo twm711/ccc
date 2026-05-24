@@ -26,10 +26,19 @@ var (
 
 // ─── CommAgent Service ───
 
+// CommAgentProvider handles multi-turn autonomous conversations.
+type CommAgentProvider interface {
+	GenerateReply(ctx context.Context, systemPrompt, conversationHistory, userMessage string) (string, error)
+	ShouldTransfer(ctx context.Context, systemPrompt, conversationHistory string) (bool, string, error)
+}
+
 type CommAgentService struct {
 	agentRepo   CommAgentRepository
 	sessionRepo CommAgentSessionRepository
+	provider    CommAgentProvider
 }
+
+func (s *CommAgentService) SetProvider(p CommAgentProvider) { s.provider = p }
 
 func NewCommAgentService(ar CommAgentRepository, sr CommAgentSessionRepository) *CommAgentService {
 	return &CommAgentService{agentRepo: ar, sessionRepo: sr}
@@ -136,9 +145,18 @@ func (s *CommAgentService) EndSession(ctx context.Context, sess *CommAgentSessio
 
 // ─── VoiceProfile Service ───
 
-type VoiceProfileService struct {
-	repo VoiceProfileRepository
+// VoiceCloningProvider handles voice profile training and synthesis.
+type VoiceCloningProvider interface {
+	StartCloneTraining(ctx context.Context, sampleAudioURL string) (providerJobID string, err error)
+	CheckTrainingStatus(ctx context.Context, providerJobID string) (ready bool, providerVoiceID string, err error)
 }
+
+type VoiceProfileService struct {
+	repo     VoiceProfileRepository
+	provider VoiceCloningProvider
+}
+
+func (s *VoiceProfileService) SetProvider(p VoiceCloningProvider) { s.provider = p }
 
 func NewVoiceProfileService(r VoiceProfileRepository) *VoiceProfileService {
 	return &VoiceProfileService{repo: r}
@@ -220,9 +238,18 @@ func (s *VoiceProfileService) Delete(ctx context.Context, tenantID, id int64) er
 
 // ─── ConversationAnalysis Service ───
 
-type ConversationAnalysisService struct {
-	repo ConversationAnalysisTaskRepository
+// ConversationAnalyticsProvider runs batch analysis over transcripts.
+type ConversationAnalyticsProvider interface {
+	MineIntents(ctx context.Context, transcripts []string) (resultJSON string, err error)
+	DiscoverSOPs(ctx context.Context, transcripts []string) (resultJSON string, err error)
 }
+
+type ConversationAnalysisService struct {
+	repo     ConversationAnalysisTaskRepository
+	provider ConversationAnalyticsProvider
+}
+
+func (s *ConversationAnalysisService) SetProvider(p ConversationAnalyticsProvider) { s.provider = p }
 
 func NewConversationAnalysisService(r ConversationAnalysisTaskRepository) *ConversationAnalysisService {
 	return &ConversationAnalysisService{repo: r}
@@ -287,11 +314,19 @@ func (s *ConversationAnalysisService) Complete(ctx context.Context, task *Conver
 
 // ─── Training Service ───
 
+// TrainingProvider generates AI feedback for simulated calls.
+type TrainingProvider interface {
+	EvaluateSimulatedCall(ctx context.Context, scenario, transcript string) (feedback string, score int, err error)
+}
+
 type TrainingService struct {
 	courseRepo TrainingCourseRepository
-	examRepo  TrainingExamRepository
-	simRepo   SimulatedCallRepository
+	examRepo   TrainingExamRepository
+	simRepo    SimulatedCallRepository
+	provider   TrainingProvider
 }
+
+func (s *TrainingService) SetProvider(p TrainingProvider) { s.provider = p }
 
 func NewTrainingService(cr TrainingCourseRepository, er TrainingExamRepository, sr SimulatedCallRepository) *TrainingService {
 	return &TrainingService{courseRepo: cr, examRepo: er, simRepo: sr}
@@ -427,10 +462,18 @@ func (s *TrainingService) ListSimulatedCalls(ctx context.Context, tenantID, agen
 
 // ─── RingAnalysis Service ───
 
+// RingAnalysisProvider detects call answering patterns.
+type RingAnalysisProvider interface {
+	AnalyzeRingAudio(ctx context.Context, audioData []byte) (result string, confidence float64, err error)
+}
+
 type RingAnalysisService struct {
 	configRepo RingAnalysisConfigRepository
 	logRepo    RingAnalysisLogRepository
+	provider   RingAnalysisProvider
 }
+
+func (s *RingAnalysisService) SetProvider(p RingAnalysisProvider) { s.provider = p }
 
 func NewRingAnalysisService(cr RingAnalysisConfigRepository, lr RingAnalysisLogRepository) *RingAnalysisService {
 	return &RingAnalysisService{configRepo: cr, logRepo: lr}
@@ -470,9 +513,17 @@ func (s *RingAnalysisService) GetCallLogs(ctx context.Context, tenantID, callID 
 
 // ─── FullDuplex Service ───
 
-type FullDuplexService struct {
-	repo FullDuplexConfigRepository
+// FullDuplexProvider handles real-time full-duplex interaction.
+type FullDuplexProvider interface {
+	DetectInterruption(ctx context.Context, audioChunk []byte, sensitivity float64) (interrupted bool, err error)
 }
+
+type FullDuplexService struct {
+	repo     FullDuplexConfigRepository
+	provider FullDuplexProvider
+}
+
+func (s *FullDuplexService) SetProvider(p FullDuplexProvider) { s.provider = p }
 
 func NewFullDuplexService(r FullDuplexConfigRepository) *FullDuplexService {
 	return &FullDuplexService{repo: r}

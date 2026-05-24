@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -81,17 +82,84 @@ func (r *DashboardRepo) UpdateOverview(ctx context.Context, o *report.DashboardO
 	return r.client.HSet(ctx, key, fields).Err()
 }
 
-func (r *DashboardRepo) GetCallFunnel(_ context.Context, _ int64) (*report.CallFunnel, error) {
-	// In production, this would aggregate from Redis or MySQL.
-	return &report.CallFunnel{}, nil
+func (r *DashboardRepo) GetCallFunnel(ctx context.Context, tenantID int64) (*report.CallFunnel, error) {
+	key := fmt.Sprintf("funnel:%d", tenantID)
+	data, err := r.client.HGetAll(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+	return &report.CallFunnel{
+		TotalInbound:    atoi(data["total_inbound"]),
+		IVRHandled:      atoi(data["ivr_handled"]),
+		RobotHandled:    atoi(data["robot_handled"]),
+		TransferToHuman: atoi(data["transfer_to_human"]),
+		FullService:     atoi(data["full_service"]),
+		HalfService:     atoi(data["half_service"]),
+		DirectTransfer:  atoi(data["direct_transfer"]),
+		ActualAnswered:  atoi(data["actual_answered"]),
+		Abandoned:       atoi(data["abandoned"]),
+	}, nil
 }
 
-func (r *DashboardRepo) GetCallTrend(_ context.Context, _ int64, _ int) ([]*report.CallTrend, error) {
-	return nil, nil
+func (r *DashboardRepo) GetCallTrend(ctx context.Context, tenantID int64, intervalMin int) ([]*report.CallTrend, error) {
+	if intervalMin <= 0 {
+		intervalMin = 30
+	}
+	now := time.Now()
+	var trends []*report.CallTrend
+	// Read last 24 hours of trend data in intervals from Redis
+	for i := 0; i < 24*60/intervalMin; i++ {
+		t := now.Add(-time.Duration(i*intervalMin) * time.Minute)
+		slotKey := fmt.Sprintf("trend:%d:%s", tenantID, t.Format("2006010215")+fmt.Sprintf("%02d", t.Minute()/intervalMin*intervalMin))
+		data, err := r.client.HGetAll(ctx, slotKey).Result()
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		trends = append(trends, &report.CallTrend{
+			Time:      t.Truncate(time.Duration(intervalMin) * time.Minute),
+			Inbound:   atoi(data["inbound"]),
+			Outbound:  atoi(data["outbound"]),
+			Answered:  atoi(data["answered"]),
+			Abandoned: atoi(data["abandoned"]),
+		})
+	}
+	// Reverse to chronological order
+	for i, j := 0, len(trends)-1; i < j; i, j = i+1, j-1 {
+		trends[i], trends[j] = trends[j], trends[i]
+	}
+	return trends, nil
 }
 
-func (r *DashboardRepo) GetAgentStatusList(_ context.Context, _ int64) ([]*report.AgentStatusSummary, error) {
-	return nil, nil
+func (r *DashboardRepo) GetAgentStatusList(ctx context.Context, tenantID int64) ([]*report.AgentStatusSummary, error) {
+	key := fmt.Sprintf("agent_status:%d", tenantID)
+	data, err := r.client.HGetAll(ctx, key).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	var list []*report.AgentStatusSummary
+	for agentKey, statusJSON := range data {
+		agentID, _ := strconv.ParseInt(agentKey, 10, 64)
+		var entry struct {
+			Name        string `json:"name"`
+			Status      string `json:"status"`
+			SubState    string `json:"sub_state"`
+			WorkMode    string `json:"work_mode"`
+			DurationSec int    `json:"duration_sec"`
+		}
+		if err := json.Unmarshal([]byte(statusJSON), &entry); err != nil {
+			continue
+		}
+		list = append(list, &report.AgentStatusSummary{
+			AgentID:     agentID,
+			AgentName:   entry.Name,
+			Status:      entry.Status,
+			SubState:    entry.SubState,
+			WorkMode:    entry.WorkMode,
+			DurationSec: entry.DurationSec,
+		})
+	}
+	return list, nil
 }
 
 func atoi(s string) int {

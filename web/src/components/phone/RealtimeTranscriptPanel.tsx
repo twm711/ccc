@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Card, Tag, Empty, Switch, Space } from 'antd';
 import { AudioOutlined, UserOutlined, RobotOutlined } from '@ant-design/icons';
 
@@ -18,18 +18,64 @@ const roleConfig = {
 
 const sentimentColor = { positive: '#52c41a', neutral: '#999', negative: '#ff4d4f' };
 
-export default function RealtimeTranscriptPanel() {
+export default function RealtimeTranscriptPanel({ callId }: { callId?: number }) {
   const [lines, setLines] = useState<TranscriptLine[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
+  const [connected, setConnected] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
 
-  // Simulate receiving transcript lines via polling or WebSocket.
+  const connectWS = useCallback(() => {
+    if (!callId) return;
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/transcript?call_id=${callId}`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      setConnected(true);
+      setLines([{
+        id: 'sys-connected',
+        role: 'system',
+        text: '实时转写已连接',
+        timestamp: new Date().toLocaleTimeString(),
+      }]);
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'transcript') {
+          const line: TranscriptLine = {
+            id: data.id || `${Date.now()}-${Math.random()}`,
+            role: data.role || 'system',
+            text: data.text || '',
+            timestamp: data.timestamp || new Date().toLocaleTimeString(),
+            sentiment: data.sentiment,
+          };
+          setLines((prev) => [...prev, line]);
+        }
+      } catch {
+        // ignore malformed messages
+      }
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+    };
+
+    ws.onerror = () => {
+      setConnected(false);
+    };
+
+    wsRef.current = ws;
+  }, [callId]);
+
   useEffect(() => {
-    const demo: TranscriptLine[] = [
-      { id: '1', role: 'system', text: '通话已接通', timestamp: new Date().toLocaleTimeString() },
-    ];
-    setLines(demo);
-  }, []);
+    connectWS();
+    return () => {
+      wsRef.current?.close();
+    };
+  }, [connectWS]);
 
   useEffect(() => {
     if (autoScroll) bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -37,7 +83,13 @@ export default function RealtimeTranscriptPanel() {
 
   return (
     <Card
-      title={<Space><AudioOutlined /> 实时转写</Space>}
+      title={
+        <Space>
+          <AudioOutlined />
+          实时转写
+          <Tag color={connected ? 'green' : 'red'}>{connected ? '已连接' : '未连接'}</Tag>
+        </Space>
+      }
       size="small"
       extra={<Switch checkedChildren="自动滚动" unCheckedChildren="暂停" checked={autoScroll} onChange={setAutoScroll} />}
       style={{ height: '100%' }}

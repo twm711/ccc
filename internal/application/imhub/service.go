@@ -4,9 +4,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
+
+var imUpgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 4096,
+	CheckOrigin:     func(r *http.Request) bool { return true },
+}
 
 // IMEvent represents a message event sent over WebSocket.
 type IMEvent struct {
@@ -77,10 +85,58 @@ func (h *Hub) Broadcast(sessionID int64, event IMEvent) {
 	}
 }
 
-// ServeWS is a placeholder for WebSocket upgrade handling.
+// ServeWS upgrades the HTTP connection to WebSocket for real-time IM messaging.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
-	// In production, use gorilla/websocket or nhooyr.io/websocket for upgrade.
-	// This is a structural placeholder — actual WebSocket upgrade is deferred
-	// to frontend integration phase.
-	http.Error(w, "websocket endpoint: use a WebSocket client", http.StatusUpgradeRequired)
+	conn, err := imUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("im ws: upgrade failed")
+		return
+	}
+
+	clientID := r.URL.Query().Get("client_id")
+	if clientID == "" {
+		clientID = r.RemoteAddr
+	}
+	sessionID := int64(0)
+	if v := r.URL.Query().Get("session_id"); v != "" {
+		json.Unmarshal([]byte(v), &sessionID)
+	}
+
+	client := &Client{ID: clientID, SessionID: sessionID, Send: make(chan []byte, 256)}
+	h.Register(client)
+
+	// Writer goroutine
+	go func() {
+		defer func() {
+			conn.Close()
+			h.Unregister(client)
+		}()
+		for msg := range client.Send {
+			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Reader goroutine (receive messages from client)
+	conn.SetReadLimit(8192)
+	conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(120 * time.Second))
+		return nil
+	})
+	for {
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			break
+		}
+		var event IMEvent
+		if err := json.Unmarshal(msg, &event); err != nil {
+			continue
+		}
+		if event.SessionID == 0 {
+			event.SessionID = client.SessionID
+		}
+		h.Broadcast(event.SessionID, event)
+	}
 }

@@ -36,6 +36,38 @@ export default function AgentPhoneBar() {
   const [duration, setDuration] = useState(0);
   const [transferOpen, setTransferOpen] = useState(false);
 
+  // WebSocket for real-time call events
+  useEffect(() => {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/agent-events`;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        switch (data.type) {
+          case 'call_ringing':
+            setStatus('ringing');
+            setCallId(data.call_id);
+            break;
+          case 'call_answered':
+            setStatus('talking');
+            setDuration(0);
+            break;
+          case 'call_ended':
+            setStatus('acw');
+            setHeld(false);
+            setMuted(false);
+            break;
+        }
+      } catch {
+        // ignore
+      }
+    };
+
+    return () => ws.close();
+  }, []);
+
   // Timer for call duration.
   useEffect(() => {
     if (status !== 'talking') return;

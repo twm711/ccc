@@ -1,8 +1,13 @@
 package esl
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +29,9 @@ type conn struct {
 	id        int
 	connected bool
 	lastUsed  time.Time
+	tcpConn   net.Conn
+	reader    *bufio.Reader
+	mu        sync.Mutex
 }
 
 type circuitBreaker struct {
@@ -95,10 +103,51 @@ func (c *Client) Release(cn *conn) {
 }
 
 func (c *Client) connect(cn *conn) error {
-	c.logger.Debug().Int("conn_id", cn.id).Str("host", c.host).Msg("connecting to FreeSWITCH ESL")
-	// In production: use percipia/eslgo to establish ESL connection
-	// conn, err := eslgo.Dial(fmt.Sprintf("%s:%d", c.host, c.port), c.pass)
+	if cn.tcpConn != nil {
+		cn.tcpConn.Close()
+		cn.tcpConn = nil
+		cn.reader = nil
+	}
+
+	addr := net.JoinHostPort(c.host, strconv.Itoa(c.port))
+	c.logger.Debug().Int("conn_id", cn.id).Str("host", addr).Msg("connecting to FreeSWITCH ESL")
+
+	tcpConn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("esl: dial %s: %w", addr, err)
+	}
+
+	reader := bufio.NewReader(tcpConn)
+
+	headers, err := readHeaders(reader)
+	if err != nil {
+		tcpConn.Close()
+		return fmt.Errorf("esl: read auth request: %w", err)
+	}
+	if headers["Content-Type"] != "auth/request" {
+		tcpConn.Close()
+		return fmt.Errorf("esl: expected auth/request, got %s", headers["Content-Type"])
+	}
+
+	if _, err := fmt.Fprintf(tcpConn, "auth %s\n\n", c.pass); err != nil {
+		tcpConn.Close()
+		return fmt.Errorf("esl: send auth: %w", err)
+	}
+
+	headers, err = readHeaders(reader)
+	if err != nil {
+		tcpConn.Close()
+		return fmt.Errorf("esl: read auth reply: %w", err)
+	}
+	if !strings.HasPrefix(headers["Reply-Text"], "+OK") {
+		tcpConn.Close()
+		return fmt.Errorf("esl: auth rejected: %s", headers["Reply-Text"])
+	}
+
+	cn.tcpConn = tcpConn
+	cn.reader = reader
 	cn.connected = true
+	c.logger.Info().Int("conn_id", cn.id).Str("host", addr).Msg("ESL connection established")
 	return nil
 }
 
@@ -110,9 +159,51 @@ func (c *Client) SendCommand(ctx context.Context, command string) (string, error
 	}
 	defer c.Release(cn)
 
+	cn.mu.Lock()
+	defer cn.mu.Unlock()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		cn.tcpConn.SetDeadline(deadline)
+	} else {
+		cn.tcpConn.SetDeadline(time.Now().Add(30 * time.Second))
+	}
+	defer cn.tcpConn.SetDeadline(time.Time{})
+
 	c.logger.Debug().Int("conn_id", cn.id).Str("cmd", command).Msg("ESL command")
-	// In production: cn.eslConn.SendCommand(ctx, command)
-	return "OK", nil
+
+	if _, err := fmt.Fprintf(cn.tcpConn, "api %s\n\n", command); err != nil {
+		c.breaker.recordFailure()
+		cn.connected = false
+		return "", fmt.Errorf("esl: send: %w", err)
+	}
+
+	headers, err := readHeaders(cn.reader)
+	if err != nil {
+		c.breaker.recordFailure()
+		cn.connected = false
+		return "", fmt.Errorf("esl: read response: %w", err)
+	}
+
+	var body string
+	if cl := headers["Content-Length"]; cl != "" {
+		length, _ := strconv.Atoi(cl)
+		if length > 0 {
+			buf := make([]byte, length)
+			if _, err := io.ReadFull(cn.reader, buf); err != nil {
+				c.breaker.recordFailure()
+				cn.connected = false
+				return "", fmt.Errorf("esl: read body: %w", err)
+			}
+			body = string(buf)
+		}
+	}
+
+	c.breaker.recordSuccess()
+	body = strings.TrimSpace(body)
+	if strings.HasPrefix(body, "-ERR") {
+		return "", fmt.Errorf("esl: %s", body)
+	}
+	return body, nil
 }
 
 // Originate starts a new call via FreeSWITCH.
@@ -251,7 +342,35 @@ func (c *Client) FlashSMS(ctx context.Context, from, to, message string) error {
 }
 
 func (c *Client) Close() {
-	close(c.pool)
+	for {
+		select {
+		case cn := <-c.pool:
+			if cn.tcpConn != nil {
+				cn.tcpConn.Close()
+			}
+		default:
+			close(c.pool)
+			return
+		}
+	}
+}
+
+func readHeaders(r *bufio.Reader) (map[string]string, error) {
+	headers := make(map[string]string)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return nil, err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			break
+		}
+		if idx := strings.Index(line, ": "); idx > 0 {
+			headers[line[:idx]] = line[idx+2:]
+		}
+	}
+	return headers, nil
 }
 
 // Circuit breaker methods

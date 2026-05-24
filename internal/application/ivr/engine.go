@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/divord97/ccc/internal/domain/routing"
+	"github.com/divord97/ccc/internal/infrastructure/esl"
 )
 
 // Engine interprets an IVR FlowGraph DAG node-by-node.
@@ -23,6 +24,8 @@ type Session struct {
 	CallID    int64
 	TenantID  int64
 	FlowID    int64
+	CallUUID  string // FreeSWITCH call UUID
+	ESL       *esl.Client
 	Variables map[string]string
 	History   []NodeVisit
 }
@@ -99,7 +102,7 @@ func (e *Engine) Execute(ctx context.Context, sess *Session, graph *routing.Flow
 }
 
 // NewSession creates a new IVR execution session.
-func NewSession(callID, tenantID, flowID int64, sysVars map[string]string) *Session {
+func NewSession(callID, tenantID, flowID int64, callUUID string, eslClient *esl.Client, sysVars map[string]string) *Session {
 	vars := make(map[string]string)
 	for k, v := range sysVars {
 		vars[k] = v
@@ -108,12 +111,14 @@ func NewSession(callID, tenantID, flowID int64, sysVars map[string]string) *Sess
 		CallID:    callID,
 		TenantID:  tenantID,
 		FlowID:    flowID,
+		CallUUID:  callUUID,
+		ESL:       eslClient,
 		Variables: vars,
 	}
 }
 
 // DefaultEngine returns an engine with all built-in node handlers registered.
-func DefaultEngine() *Engine {
+func DefaultEngine(eslClient *esl.Client) *Engine {
 	e := NewEngine()
 	e.RegisterHandler(routing.NodeStart, &StartHandler{})
 	e.RegisterHandler(routing.NodePlay, &PlayHandler{})

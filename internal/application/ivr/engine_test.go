@@ -15,8 +15,8 @@ func makeGraph(nodes []routing.FlowNode) *routing.FlowGraph {
 }
 
 func TestEngine_SimpleFlow_StartPlayEnd(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, map[string]string{"caller": "+86138"})
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, map[string]string{"caller": "+86138"})
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{"variables":{"greeting":"hello"}}`), Exits: map[string]string{"default": "p"}},
@@ -32,8 +32,8 @@ func TestEngine_SimpleFlow_StartPlayEnd(t *testing.T) {
 }
 
 func TestEngine_BranchCondition(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, map[string]string{"level": "vip"})
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, map[string]string{"level": "vip"})
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "b"}},
@@ -55,8 +55,8 @@ func TestEngine_BranchCondition(t *testing.T) {
 }
 
 func TestEngine_BranchDefaultPath(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, map[string]string{"level": "unknown"})
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, map[string]string{"level": "unknown"})
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "b"}},
@@ -73,8 +73,8 @@ func TestEngine_BranchDefaultPath(t *testing.T) {
 }
 
 func TestEngine_SetVariable(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, nil)
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "sv"}},
@@ -91,8 +91,8 @@ func TestEngine_SetVariable(t *testing.T) {
 }
 
 func TestEngine_HangupReason(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, nil)
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "hr"}},
@@ -106,8 +106,8 @@ func TestEngine_HangupReason(t *testing.T) {
 }
 
 func TestEngine_CollectDTMF(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, nil)
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "dtmf"}},
@@ -121,8 +121,8 @@ func TestEngine_CollectDTMF(t *testing.T) {
 }
 
 func TestEngine_TransferToAgent(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, nil)
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "ta"}},
@@ -137,8 +137,8 @@ func TestEngine_TransferToAgent(t *testing.T) {
 }
 
 func TestEngine_FullFlow_AllNodeTypes(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, nil)
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	// Linear chain through all 20 node types
 	g := makeGraph([]routing.FlowNode{
@@ -152,15 +152,15 @@ func TestEngine_FullFlow_AllNodeTypes(t *testing.T) {
 		{ID: "n08", Type: routing.NodeSetVariable, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "n09"}},
 		{ID: "n09", Type: routing.NodeVoicemail, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "n10"}},
 		{ID: "n10", Type: routing.NodeHangupReason, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "n11"}},
-		{ID: "n11", Type: routing.NodeFunction, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n12"}},
-		{ID: "n12", Type: routing.NodeHTTPRequest, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n13"}},
-		{ID: "n13", Type: routing.NodeJSONParser, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n14"}},
+		{ID: "n11", Type: routing.NodeFunction, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n12", "error": "n12"}},
+		{ID: "n12", Type: routing.NodeHTTPRequest, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n13", "error": "n13"}},
+		{ID: "n13", Type: routing.NodeJSONParser, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n14", "error": "n14"}},
 		{ID: "n14", Type: routing.NodeSMS, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n15"}},
 		{ID: "n15", Type: routing.NodeSatisfactionRating, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n16"}},
 		{ID: "n16", Type: routing.NodeASR, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n17"}},
 		{ID: "n17", Type: routing.NodeSubFlow, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "n18"}},
 		{ID: "n18", Type: routing.NodeDigitalEmployee, Config: json.RawMessage(`{}`), Exits: map[string]string{"success": "n19"}},
-		{ID: "n19", Type: routing.NodeCallback, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "n20"}},
+		{ID: "n19", Type: routing.NodeCallback, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "n20", "reject": "n20", "confirm": "n20"}},
 		{ID: "n20", Type: routing.NodeEnd, Config: json.RawMessage(`{}`), Exits: map[string]string{}},
 	})
 
@@ -170,8 +170,8 @@ func TestEngine_FullFlow_AllNodeTypes(t *testing.T) {
 }
 
 func TestEngine_NoStartNode_Error(t *testing.T) {
-	e := DefaultEngine()
-	sess := NewSession(1, 1, 1, nil)
+	e := DefaultEngine(nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "e", Type: routing.NodeEnd, Config: json.RawMessage(`{}`), Exits: map[string]string{}},
@@ -183,7 +183,7 @@ func TestEngine_NoStartNode_Error(t *testing.T) {
 
 func TestEngine_MissingHandler_Error(t *testing.T) {
 	e := NewEngine() // empty engine, no handlers registered
-	sess := NewSession(1, 1, 1, nil)
+	sess := NewSession(1, 1, 1, "", nil, nil)
 
 	g := makeGraph([]routing.FlowNode{
 		{ID: "s", Type: routing.NodeStart, Config: json.RawMessage(`{}`), Exits: map[string]string{"default": "e"}},
