@@ -32,6 +32,8 @@ interface AgentStatus {
   connected: number;
 }
 
+const primaryGradient = { '0%': '#108ee9', '100%': '#87d068' };
+
 export default function CampaignLiveDashboard() {
   const [campaigns, setCampaigns] = useState<{ id: number; name: string; status: string }[]>([]);
   const [selectedId, setSelectedId] = useState<number | null>(null);
@@ -154,5 +156,3 @@ export default function CampaignLiveDashboard() {
     </>
   );
 }
-
-const primaryGradient = { '0%': '#108ee9', '100%': '#87d068' };
