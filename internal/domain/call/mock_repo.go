@@ -52,6 +52,9 @@ func (r *MockCallRepo) ListWithFilter(_ context.Context, tenantID int64, filter 
 		if filter.CallType != nil && c.CallType != *filter.CallType {
 			continue
 		}
+		if filter.MediaType != nil && c.MediaType != *filter.MediaType {
+			continue
+		}
 		if filter.Status != nil && c.Status != *filter.Status {
 			continue
 		}

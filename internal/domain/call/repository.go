@@ -8,6 +8,7 @@ import (
 type CallListFilter struct {
 	Direction *CallDirection
 	CallType  *CallType
+	MediaType *MediaType
 	Status    *CallStatus
 	Caller    string
 	Callee    string

@@ -73,6 +73,15 @@ const (
 	MediaTypeVideo MediaType = "video"
 )
 
+var validMediaTypes = map[MediaType]bool{
+	MediaTypeAudio: true,
+	MediaTypeVideo: true,
+}
+
+func ValidMediaType(mt MediaType) bool {
+	return validMediaTypes[mt]
+}
+
 type Call struct {
 	ID                  int64           `db:"id" json:"id"`
 	TenantID            int64           `db:"tenant_id" json:"tenant_id"`

@@ -38,6 +38,7 @@ type DialRequest struct {
 	TenantID    int64
 	AgentUserID int64
 	Callee      string
+	MediaType   call.MediaType
 	CLIPolicyID *int64
 }
 
@@ -67,6 +68,7 @@ func (s *Service) Dial(ctx context.Context, req DialRequest) (*call.Call, error)
 	agentID := req.AgentUserID
 	input := call.CreateCallInput{
 		TenantID:      req.TenantID,
+		MediaType:     req.MediaType,
 		Caller:        cli.Number,
 		Callee:        req.Callee,
 		AgentUserID:   &agentID,
@@ -96,6 +98,7 @@ type InternalDialRequest struct {
 	CalleeAgentID int64
 	CallerExt     string
 	CalleeExt     string
+	MediaType     call.MediaType
 }
 
 // DialInternal creates an internal (agent-to-agent) call.
@@ -103,6 +106,7 @@ func (s *Service) DialInternal(ctx context.Context, req InternalDialRequest) (*c
 	agentID := req.CallerAgentID
 	c, err := s.callSvc.CreateInternalCall(ctx, call.CreateCallInput{
 		TenantID:    req.TenantID,
+		MediaType:   req.MediaType,
 		Caller:      req.CallerExt,
 		Callee:      req.CalleeExt,
 		AgentUserID: &agentID,

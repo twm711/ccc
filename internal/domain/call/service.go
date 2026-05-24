@@ -27,6 +27,7 @@ type CreateCallInput struct {
 	TenantID      int64
 	Direction     CallDirection
 	CallType      CallType
+	MediaType     MediaType
 	Caller        string
 	Callee        string
 	AgentUserID   *int64
@@ -36,12 +37,28 @@ type CreateCallInput struct {
 	SIPTrunkID    *int64
 }
 
+var ErrInvalidMediaType = fmt.Errorf("call: invalid media type, must be audio or video")
+
+func resolveMediaType(mt MediaType) (MediaType, error) {
+	if mt == "" {
+		return MediaTypeAudio, nil
+	}
+	if !ValidMediaType(mt) {
+		return "", ErrInvalidMediaType
+	}
+	return mt, nil
+}
+
 func (s *CallService) CreateInboundCall(ctx context.Context, in CreateCallInput) (*Call, error) {
 	if in.Direction == "" {
 		in.Direction = DirectionInbound
 	}
 	if in.CallType == "" {
 		in.CallType = CallTypeNormal
+	}
+	mt, err := resolveMediaType(in.MediaType)
+	if err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -50,7 +67,7 @@ func (s *CallService) CreateInboundCall(ctx context.Context, in CreateCallInput)
 		TenantID:      in.TenantID,
 		Direction:     in.Direction,
 		CallType:      in.CallType,
-		MediaType:     MediaTypeAudio,
+		MediaType:     mt,
 		Caller:        in.Caller,
 		Callee:        in.Callee,
 		IVRFlowID:     in.IVRFlowID,
@@ -128,6 +145,10 @@ func (s *CallService) CreateOutboundCall(ctx context.Context, in CreateCallInput
 	if in.CallType == "" {
 		in.CallType = CallTypeNormal
 	}
+	mt, err := resolveMediaType(in.MediaType)
+	if err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	c := &Call{
@@ -135,7 +156,7 @@ func (s *CallService) CreateOutboundCall(ctx context.Context, in CreateCallInput
 		TenantID:      in.TenantID,
 		Direction:     in.Direction,
 		CallType:      in.CallType,
-		MediaType:     MediaTypeAudio,
+		MediaType:     mt,
 		Caller:        in.Caller,
 		Callee:        in.Callee,
 		AgentUserID:   in.AgentUserID,
@@ -172,6 +193,10 @@ func (s *CallService) CreateInternalCall(ctx context.Context, in CreateCallInput
 	}
 	in.Direction = DirectionOutbound
 	in.CallType = CallTypeInternal
+	mt, err := resolveMediaType(in.MediaType)
+	if err != nil {
+		return nil, err
+	}
 
 	now := time.Now()
 	c := &Call{
@@ -179,7 +204,7 @@ func (s *CallService) CreateInternalCall(ctx context.Context, in CreateCallInput
 		TenantID:    in.TenantID,
 		Direction:   in.Direction,
 		CallType:    in.CallType,
-		MediaType:   MediaTypeAudio,
+		MediaType:   mt,
 		Caller:      in.Caller,
 		Callee:      in.Callee,
 		AgentUserID: in.AgentUserID,

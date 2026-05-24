@@ -470,3 +470,100 @@ func TestCallService_Whisper_PreConnect(t *testing.T) {
 	err := svc.WhisperPreConnect(context.Background(), c.ID, "来电: VIP客户 张三")
 	require.NoError(t, err)
 }
+
+// --- Video Call Tests ---
+
+func TestCallService_CreateVideoInbound(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c, err := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID:  1,
+		Caller:    "+8613800001111",
+		Callee:    "+862188880001",
+		MediaType: MediaTypeVideo,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MediaTypeVideo, c.MediaType)
+	assert.Equal(t, DirectionInbound, c.Direction)
+}
+
+func TestCallService_CreateVideoOutbound(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c, err := svc.CreateOutboundCall(context.Background(), CreateCallInput{
+		TenantID:  1,
+		Caller:    "+862188880001",
+		Callee:    "+8613800001111",
+		MediaType: MediaTypeVideo,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MediaTypeVideo, c.MediaType)
+	assert.Equal(t, DirectionOutbound, c.Direction)
+}
+
+func TestCallService_CreateVideoInternal(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	agentID := int64(100)
+	c, err := svc.CreateInternalCall(context.Background(), CreateCallInput{
+		TenantID:    1,
+		Caller:      "1001",
+		Callee:      "1002",
+		MediaType:   MediaTypeVideo,
+		AgentUserID: &agentID,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MediaTypeVideo, c.MediaType)
+	assert.Equal(t, CallTypeInternal, c.CallType)
+}
+
+func TestCallService_DefaultMediaType_Audio(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	c, err := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID: 1,
+		Caller:   "+8613800001111",
+		Callee:   "+862188880001",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, MediaTypeAudio, c.MediaType)
+}
+
+func TestValidMediaType(t *testing.T) {
+	assert.True(t, ValidMediaType(MediaTypeAudio))
+	assert.True(t, ValidMediaType(MediaTypeVideo))
+	assert.False(t, ValidMediaType(MediaType("chat")))
+	assert.False(t, ValidMediaType(MediaType("")))
+}
+
+func TestCallService_InvalidMediaType_Rejected(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	_, err := svc.CreateInboundCall(context.Background(), CreateCallInput{
+		TenantID:  1,
+		Caller:    "+8613800001111",
+		Callee:    "+862188880001",
+		MediaType: MediaType("foobar"),
+	})
+	assert.ErrorIs(t, err, ErrInvalidMediaType)
+}
+
+func TestCallService_ListCalls_FilterMediaType(t *testing.T) {
+	svc := NewCallService(NewMockCallRepo(), NewMockCallEventRepo(), NewMockIVRTrackingRepo())
+	ctx := context.Background()
+
+	_, _ = svc.CreateInboundCall(ctx, CreateCallInput{TenantID: 1, Caller: "a", Callee: "b"})
+	_, _ = svc.CreateInboundCall(ctx, CreateCallInput{TenantID: 1, Caller: "c", Callee: "d", MediaType: MediaTypeVideo})
+	_, _ = svc.CreateOutboundCall(ctx, CreateCallInput{TenantID: 1, Caller: "e", Callee: "f", MediaType: MediaTypeVideo})
+
+	video := MediaTypeVideo
+	calls, total, err := svc.ListCalls(ctx, 1, CallListFilter{MediaType: &video}, 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), total)
+	assert.Len(t, calls, 2)
+	for _, c := range calls {
+		assert.Equal(t, MediaTypeVideo, c.MediaType)
+	}
+
+	audio := MediaTypeAudio
+	calls, total, err = svc.ListCalls(ctx, 1, CallListFilter{MediaType: &audio}, 0, 10)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), total)
+	assert.Len(t, calls, 1)
+	assert.Equal(t, MediaTypeAudio, calls[0].MediaType)
+}

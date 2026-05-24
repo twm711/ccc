@@ -23,6 +23,8 @@
       <param name="local-network" value="localnet.auto"/>
       <param name="outbound-codec-string" value="opus,PCMU,PCMA"/>
       <param name="inbound-codec-string" value="opus,PCMU,PCMA"/>
+      <param name="outbound-video-codec-string" value="VP8,H264"/>
+      <param name="inbound-video-codec-string" value="VP8,H264"/>
       <param name="apply-candidate-acl" value="localnet.auto"/>
       <param name="apply-candidate-acl" value="wan_v4.auto"/>
       <param name="timer-name" value="soft"/>
@@ -42,6 +44,8 @@
       <param name="local-network" value="localnet.auto"/>
       <param name="outbound-codec-string" value="opus,PCMU,PCMA"/>
       <param name="inbound-codec-string" value="opus,PCMU,PCMA"/>
+      <param name="outbound-video-codec-string" value="VP8,H264"/>
+      <param name="inbound-video-codec-string" value="VP8,H264"/>
       <param name="apply-candidate-acl" value="localnet.auto"/>
       <param name="apply-candidate-acl" value="wan_v4.auto"/>
       <param name="timer-name" value="soft"/>

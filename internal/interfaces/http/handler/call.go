@@ -44,6 +44,10 @@ func (h *CallHandler) List(w http.ResponseWriter, r *http.Request) {
 		callType := call.CallType(ct)
 		filter.CallType = &callType
 	}
+	if mt := r.URL.Query().Get("media_type"); mt != "" {
+		mediaType := call.MediaType(mt)
+		filter.MediaType = &mediaType
+	}
 	if s := r.URL.Query().Get("status"); s != "" {
 		status := call.CallStatus(s)
 		filter.Status = &status
@@ -102,6 +106,7 @@ func (h *CallHandler) Dial(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		AgentUserID int64  `json:"agent_user_id"`
 		Callee      string `json:"callee"`
+		MediaType   string `json:"media_type"`
 		CLIPolicyID *int64 `json:"cli_policy_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -113,6 +118,7 @@ func (h *CallHandler) Dial(w http.ResponseWriter, r *http.Request) {
 		TenantID:    tenantID,
 		AgentUserID: input.AgentUserID,
 		Callee:      input.Callee,
+		MediaType:   call.MediaType(input.MediaType),
 		CLIPolicyID: input.CLIPolicyID,
 	})
 	if err != nil {
@@ -129,6 +135,7 @@ func (h *CallHandler) InternalDial(w http.ResponseWriter, r *http.Request) {
 		CalleeAgentID int64  `json:"callee_agent_id"`
 		CallerExt     string `json:"caller_ext"`
 		CalleeExt     string `json:"callee_ext"`
+		MediaType     string `json:"media_type"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		response.Error(w, http.StatusBadRequest, "invalid request body")
@@ -141,6 +148,7 @@ func (h *CallHandler) InternalDial(w http.ResponseWriter, r *http.Request) {
 		CalleeAgentID: input.CalleeAgentID,
 		CallerExt:     input.CallerExt,
 		CalleeExt:     input.CalleeExt,
+		MediaType:     call.MediaType(input.MediaType),
 	})
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())

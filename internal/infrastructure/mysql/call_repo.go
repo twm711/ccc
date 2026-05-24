@@ -70,6 +70,10 @@ func (r *CallRepo) ListWithFilter(ctx context.Context, tenantID int64, filter ca
 		where += " AND call_type = ?"
 		args = append(args, *filter.CallType)
 	}
+	if filter.MediaType != nil {
+		where += " AND media_type = ?"
+		args = append(args, *filter.MediaType)
+	}
 	if filter.Status != nil {
 		where += " AND status = ?"
 		args = append(args, *filter.Status)
