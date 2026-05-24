@@ -13,6 +13,11 @@ import (
 	"github.com/divord97/ccc/internal/domain/identity"
 )
 
+// AgentNotifier pushes real-time events to connected agent WebSocket clients.
+type AgentNotifier interface {
+	NotifyAgent(agentID int64, eventType string, callID int64, payload interface{})
+}
+
 // Service orchestrates cross-domain side effects for call lifecycle events.
 type Service struct {
 	callSvc     *call.CallService
@@ -21,6 +26,7 @@ type Service struct {
 	webhookSvc  *webhook.Service
 	customerSvc *crm.CustomerService
 	screenPop   *screenpop.Service
+	notifier    AgentNotifier
 }
 
 func NewService(
@@ -41,8 +47,13 @@ func NewService(
 	}
 }
 
+func (s *Service) SetAgentNotifier(n AgentNotifier) {
+	s.notifier = n
+}
+
 // EndCall ends a call and triggers all post-call side effects:
 //   - Agent → ACW state transition
+//   - Real-time WebSocket notification to agent
 //   - CSAT satisfaction survey
 //   - Webhook notification to external systems
 //   - CRM interaction history record
@@ -55,6 +66,11 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 	// Agent → ACW (non-blocking, best-effort)
 	if s.presenceSvc != nil && c.AgentUserID != nil {
 		_, _ = s.presenceSvc.SetACW(ctx, *c.AgentUserID, "")
+	}
+
+	// Real-time agent notification
+	if s.notifier != nil && c.AgentUserID != nil {
+		s.notifier.NotifyAgent(*c.AgentUserID, "call.ended", c.ID, c)
 	}
 
 	// CSAT survey trigger (non-blocking)
@@ -105,6 +121,11 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 	// Agent → Talking state
 	if s.presenceSvc != nil {
 		_, _ = s.presenceSvc.TransitionTo(ctx, agentUserID, identity.PresenceTalking)
+	}
+
+	// Real-time agent notification
+	if s.notifier != nil {
+		s.notifier.NotifyAgent(agentUserID, "call.answered", c.ID, c)
 	}
 
 	// Screen pop for inbound calls

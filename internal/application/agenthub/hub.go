@@ -68,6 +68,11 @@ func (h *Hub) Unregister(c *Client) {
 	close(c.Send)
 }
 
+// NotifyAgent implements lifecycle.AgentNotifier.
+func (h *Hub) NotifyAgent(agentID int64, eventType string, callID int64, payload interface{}) {
+	h.SendToAgent(agentID, Event{Type: eventType, CallID: callID, Payload: payload})
+}
+
 func (h *Hub) SendToAgent(agentID int64, event Event) {
 	data, err := json.Marshal(event)
 	if err != nil {

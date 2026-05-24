@@ -9,19 +9,22 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/divord97/ccc/internal/application/agenthub"
 	"github.com/divord97/ccc/internal/application/aianalysis"
 	"github.com/divord97/ccc/internal/application/b2b"
+	"github.com/divord97/ccc/internal/application/callback"
 	"github.com/divord97/ccc/internal/application/csat"
-	"github.com/divord97/ccc/internal/application/agenthub"
 	"github.com/divord97/ccc/internal/application/dashboard"
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/application/email"
 	"github.com/divord97/ccc/internal/application/imassist"
 	"github.com/divord97/ccc/internal/application/imhub"
+	"github.com/divord97/ccc/internal/application/imrouter"
 	"github.com/divord97/ccc/internal/application/lifecycle"
-	"github.com/divord97/ccc/internal/application/transcripthub"
 	"github.com/divord97/ccc/internal/application/outbound"
 	"github.com/divord97/ccc/internal/application/screenpop"
+	"github.com/divord97/ccc/internal/application/transcripthub"
+	"github.com/divord97/ccc/internal/application/trunk"
 	"github.com/divord97/ccc/internal/application/webhook"
 	"github.com/divord97/ccc/internal/config"
 	"github.com/divord97/ccc/internal/domain/ai"
@@ -151,8 +154,9 @@ func main() {
 	callSvc := call.NewCallService(callRepo, callEventRepo, ivrTrackingRepo, callbackRepo)
 
 	// ESL Client: connect to FreeSWITCH when host is configured.
+	var eslClient *esl.Client
 	if cfg.FreeSWITCH.Host != "" {
-		eslClient := esl.NewClient(esl.Config{
+		eslClient = esl.NewClient(esl.Config{
 			Host:     cfg.FreeSWITCH.Host,
 			Port:     cfg.FreeSWITCH.Port,
 			Password: cfg.FreeSWITCH.Password,
@@ -177,7 +181,6 @@ func main() {
 	// --- Phase 6 Domain Services ---
 	campaignSvc := campaign.NewCampaignService(campaignRepo, campaignCaseRepo, dncSvc)
 	trunkHealthSvc := telephony.NewTrunkHealthService(sipTrunkRepo, trunkGroupRepo)
-	_ = trunkHealthSvc
 
 	// --- Phase 7 Domain Services ---
 	customerSvc := crm.NewCustomerService(customerRepo, customerPhoneRepo, interactionRepo, customFieldRepo)
@@ -199,14 +202,16 @@ func main() {
 	socialChannelSvc := im.NewSocialChannelService(socialConfigRepo, imChannelRepo, imSessionRepo, imMessageRepo)
 
 	// --- Application Services ---
-	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, nil)
+	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, eslClient)
 	csatSvc := csat.NewService(csatConfigRepo, csatResultRepo, logger)
-	dialerSvc := dialer.NewService(campaignSvc, nil, logger)
-	b2bSvc := b2b.NewService(callRepo, callEventRepo, nil, logger)
-	_ = callbackRepo // used via callSvc
+	dialerSvc := dialer.NewService(campaignSvc, eslClient, logger)
+	b2bSvc := b2b.NewService(callRepo, callEventRepo, eslClient, logger)
+	callbackSch := callback.NewScheduler(callbackRepo, callSvc, outboundSvc, logger)
 	screenPopSvc := screenpop.NewService(screenPopConfigRepo, customerSvc)
 	webhookSvc := webhook.NewService(webhookConfigRepo, webhookLogRepo, logger)
 	lifecycleSvc := lifecycle.NewService(callSvc, agentPresenceSvc, csatSvc, webhookSvc, customerSvc, screenPopSvc)
+	imRouterSvc := imrouter.NewService(imSvc, agentPresenceSvc, skillGroupSvc, logger)
+	trunkMonitor := trunk.NewHealthMonitor(sipTrunkRepo, trunkHealthSvc, logger, eslClient)
 	emailSvc := email.NewService(imSvc, logger)
 	// LLM Provider: use DashScope when API key configured, otherwise fallback to stub.
 	var llmProvider llm.Provider
@@ -489,12 +494,37 @@ func main() {
 		Logger:               logger,
 	})
 
+	// Wire lifecycle → agentHub for real-time agent notifications
+	lifecycleSvc.SetAgentNotifier(agentHub)
+
 	// Start WebSocket hub goroutines
 	hubCtx, hubCancel := context.WithCancel(context.Background())
 	go dashboardHub.StartBroadcast(hubCtx)
 	go imHub.StartBroadcast(hubCtx)
 	go agentHub.StartBroadcast(hubCtx)
 	go transcriptHub.StartBroadcast(hubCtx)
+
+	// Start callback scheduler (processes pending callbacks every 30s)
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hubCtx.Done():
+				return
+			case <-ticker.C:
+				if n, err := callbackSch.ProcessPending(hubCtx, 0); err == nil && n > 0 {
+					logger.Info().Int("processed", n).Msg("callback scheduler: processed pending callbacks")
+				}
+			}
+		}
+	}()
+
+	// Start trunk health monitor
+	trunkMonitor.Start(hubCtx, 0)
+
+	// Wire IM router into session handler for auto-assignment
+	imSessionHandler.SetRouter(imRouterSvc)
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
 	srv := &http.Server{Addr: addr, Handler: router}

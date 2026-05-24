@@ -128,6 +128,15 @@ func (r *MockUserRepo) Update(_ context.Context, u *User) error {
 	return nil
 }
 
+func (r *MockUserRepo) UpdatePassword(_ context.Context, id int64, passwordHash string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if u, ok := r.users[id]; ok {
+		u.PasswordHash = passwordHash
+	}
+	return nil
+}
+
 func (r *MockUserRepo) FindByUsernameGlobal(_ context.Context, username string) (*User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

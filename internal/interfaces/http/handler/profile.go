@@ -57,8 +57,8 @@ func (h *ProfileHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProfileHandler) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
 	var in struct {
-		UserID      int64  `json:"user_id"`
 		OldPassword string `json:"old_password"`
 		NewPassword string `json:"new_password"`
 	}
@@ -66,11 +66,18 @@ func (h *ProfileHandler) ChangePassword(w http.ResponseWriter, r *http.Request) 
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if in.NewPassword == "" {
-		response.Error(w, http.StatusBadRequest, "new password is required")
+	if in.OldPassword == "" || in.NewPassword == "" {
+		response.Error(w, http.StatusBadRequest, "old_password and new_password are required")
 		return
 	}
-	// Password change would be handled via Keycloak in production
+	if len(in.NewPassword) < 6 {
+		response.Error(w, http.StatusBadRequest, "new password must be at least 6 characters")
+		return
+	}
+	if err := h.userSvc.ChangePassword(r.Context(), userID, in.OldPassword, in.NewPassword); err != nil {
+		response.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	response.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 

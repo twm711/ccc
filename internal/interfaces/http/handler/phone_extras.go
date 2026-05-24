@@ -45,21 +45,12 @@ func (h *ScreenPopHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 		response.JSON(w, http.StatusOK, map[string]interface{}{"customer": nil})
 		return
 	}
-	customers, err := h.customerSvc.List(r.Context(), tenantID, 0, 100)
-	if err != nil {
+	customer, err := h.customerSvc.FindByPhone(r.Context(), tenantID, phone)
+	if err != nil || customer == nil {
 		response.JSON(w, http.StatusOK, map[string]interface{}{"customer": nil})
 		return
 	}
-	for _, c := range customers {
-		phones, _ := h.customerSvc.ListPhones(r.Context(), c.ID)
-		for _, p := range phones {
-			if p.Number == phone {
-				response.JSON(w, http.StatusOK, map[string]interface{}{"customer": c})
-				return
-			}
-		}
-	}
-	response.JSON(w, http.StatusOK, map[string]interface{}{"customer": nil})
+	response.JSON(w, http.StatusOK, map[string]interface{}{"customer": customer})
 }
 
 type PreviewCaseHandler struct {
@@ -72,17 +63,23 @@ func NewPreviewCaseHandler(campaignSvc *campaign.CampaignService) *PreviewCaseHa
 
 func (h *PreviewCaseHandler) Current(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	campaigns, _, err := h.campaignSvc.List(r.Context(), tenantID, 0, 1)
+	campaigns, _, err := h.campaignSvc.List(r.Context(), tenantID, 0, 50)
 	if err != nil || len(campaigns) == 0 {
 		response.JSON(w, http.StatusOK, map[string]interface{}{"case": nil})
 		return
 	}
-	cases, _, err := h.campaignSvc.ListCases(r.Context(), campaigns[0].ID, 0, 1)
-	if err != nil || len(cases) == 0 {
-		response.JSON(w, http.StatusOK, map[string]interface{}{"case": nil})
+	for _, c := range campaigns {
+		if c.Status != campaign.CampaignStatusRunning || c.DialingMode != campaign.DialingModePreview {
+			continue
+		}
+		next, err := h.campaignSvc.GetNextCase(r.Context(), c.ID)
+		if err != nil || next == nil {
+			continue
+		}
+		response.JSON(w, http.StatusOK, map[string]interface{}{"case": next, "campaign": c})
 		return
 	}
-	response.JSON(w, http.StatusOK, map[string]interface{}{"case": cases[0]})
+	response.JSON(w, http.StatusOK, map[string]interface{}{"case": nil})
 }
 
 func (h *PreviewCaseHandler) DialCase(w http.ResponseWriter, r *http.Request) {

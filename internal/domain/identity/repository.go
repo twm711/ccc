@@ -21,6 +21,7 @@ type UserRepository interface {
 	GetByUsername(ctx context.Context, tenantID int64, username string) (*User, error)
 	FindByUsernameGlobal(ctx context.Context, username string) (*User, error)
 	Update(ctx context.Context, u *User) error
+	UpdatePassword(ctx context.Context, id int64, passwordHash string) error
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*User, int64, error)
 }
 

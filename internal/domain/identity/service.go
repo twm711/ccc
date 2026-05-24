@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/pkg/snowflake"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type TenantService struct {
@@ -149,6 +150,24 @@ func (s *UserService) Update(ctx context.Context, id int64, displayName, email, 
 
 func (s *UserService) List(ctx context.Context, tenantID int64, offset, limit int) ([]*User, int64, error) {
 	return s.users.List(ctx, tenantID, offset, limit)
+}
+
+func (s *UserService) ChangePassword(ctx context.Context, userID int64, oldPassword, newPassword string) error {
+	u, err := s.users.GetByID(ctx, userID)
+	if err != nil {
+		return ErrUserNotFound
+	}
+	if u.PasswordHash == "" {
+		return ErrPasswordNotSet
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(oldPassword)); err != nil {
+		return ErrWrongPassword
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	return s.users.UpdatePassword(ctx, userID, string(hash))
 }
 
 type AgentService struct {

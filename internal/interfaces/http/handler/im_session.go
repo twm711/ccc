@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,14 +16,24 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// IMSessionRouter auto-assigns agents to new IM sessions.
+type IMSessionRouter interface {
+	RouteSession(ctx context.Context, sessionID int64, agentUserID int64) error
+}
+
 type IMSessionHandler struct {
 	svc         *im.IMService
 	customerSvc *crm.CustomerService
 	webhookSvc  *webhook.Service
+	router      IMSessionRouter
 }
 
 func NewIMSessionHandler(svc *im.IMService, customerSvc *crm.CustomerService, webhookSvc *webhook.Service) *IMSessionHandler {
 	return &IMSessionHandler{svc: svc, customerSvc: customerSvc, webhookSvc: webhookSvc}
+}
+
+func (h *IMSessionHandler) SetRouter(r IMSessionRouter) {
+	h.router = r
 }
 
 func (h *IMSessionHandler) List(w http.ResponseWriter, r *http.Request) {

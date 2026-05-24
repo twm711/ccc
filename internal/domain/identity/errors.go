@@ -19,4 +19,6 @@ var (
 	ErrInvalidStateTransition = errors.New("invalid agent state transition")
 	ErrInvalidWorkMode        = errors.New("invalid work mode")
 	ErrAgentNotCheckedIn      = errors.New("agent is not checked in")
+	ErrWrongPassword          = errors.New("current password is incorrect")
+	ErrPasswordNotSet         = errors.New("password not set for this user")
 )
