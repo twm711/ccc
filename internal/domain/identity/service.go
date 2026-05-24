@@ -50,6 +50,9 @@ func (s *TenantService) Create(ctx context.Context, in CreateTenantInput) (*Tena
 		RecordingStorageBackend: "local",
 		Timezone:                "Asia/Shanghai",
 		Language:                "zh-CN",
+		DefaultACWSeconds:       30,
+		APIRateLimitPerSec:      100,
+		FamiliarAgentDays:       30,
 	}
 	if err := s.settings.Upsert(ctx, defaults); err != nil {
 		return nil, err
@@ -184,13 +187,13 @@ func NewAgentService(ar AgentRepository, ur UserRepository, sr TenantSettingsRep
 }
 
 type CreateAgentInput struct {
-	TenantID    int64
-	UserID      int64
-	EmployeeID  string
-	Extension   string
-	WorkMode    WorkMode
+	TenantID     int64
+	UserID       int64
+	EmployeeID   string
+	Extension    string
+	WorkMode     WorkMode
 	MaxChatSlots int
-	ACWSeconds  int
+	ACWSeconds   int
 }
 
 func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (*Agent, error) {
@@ -217,18 +220,18 @@ func (s *AgentService) Create(ctx context.Context, in CreateAgentInput) (*Agent,
 
 	now := time.Now()
 	a := &Agent{
-		ID:            snowflake.NextID(),
-		TenantID:      in.TenantID,
-		UserID:        in.UserID,
-		EmployeeID:    in.EmployeeID,
-		Extension:     in.Extension,
-		WorkMode:      in.WorkMode,
+		ID:              snowflake.NextID(),
+		TenantID:        in.TenantID,
+		UserID:          in.UserID,
+		EmployeeID:      in.EmployeeID,
+		Extension:       in.Extension,
+		WorkMode:        in.WorkMode,
 		SIPDeviceStatus: "unregistered",
-		MaxConcurrent: 1,
-		MaxChatSlots:  in.MaxChatSlots,
-		ACWSeconds:    in.ACWSeconds,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		MaxConcurrent:   1,
+		MaxChatSlots:    in.MaxChatSlots,
+		ACWSeconds:      in.ACWSeconds,
+		CreatedAt:       now,
+		UpdatedAt:       now,
 	}
 	if a.MaxChatSlots == 0 {
 		a.MaxChatSlots = 3
@@ -278,9 +281,9 @@ func (s *SkillGroupService) Create(ctx context.Context, in CreateSkillGroupInput
 	validPolicies := map[RoutingPolicy]bool{
 		RoutingPolicyRoundRobin:  true,
 		RoutingPolicyLeastRecent: true,
-		RoutingPolicyRandom:     true,
+		RoutingPolicyRandom:      true,
 		RoutingPolicySkillWeight: true,
-		RoutingPolicyFamiliar:   true,
+		RoutingPolicyFamiliar:    true,
 	}
 	if !validPolicies[in.RoutingPolicy] {
 		return nil, ErrInvalidRoutingPolicy
@@ -349,14 +352,24 @@ func (s *SkillGroupService) GetMembers(ctx context.Context, skillGroupID int64) 
 // --- AgentPresenceService ---
 
 type AgentPresenceService struct {
-	presence  AgentPresenceRepository
-	logs      AgentPresenceLogRepository
-	acwTimers map[int64]func()
-	mu        sync.Mutex
+	presence    AgentPresenceRepository
+	logs        AgentPresenceLogRepository
+	acwTimers   map[int64]func()
+	acwResolver func(ctx context.Context, tenantID, agentID int64) int
+	mu          sync.Mutex
 }
 
 func NewAgentPresenceService(pr AgentPresenceRepository, lr AgentPresenceLogRepository) *AgentPresenceService {
 	return &AgentPresenceService{presence: pr, logs: lr, acwTimers: make(map[int64]func())}
+}
+
+// SetACWResolver wires a callback that returns the effective ACW seconds for
+// an agent (typically agent.acw_seconds, falling back to
+// tenant_settings.default_acw_seconds). Without a resolver, SetACW uses the
+// presence row's stored ACWSeconds, which is only correct if it was populated
+// elsewhere; with a resolver, the value is refreshed on every ACW transition.
+func (s *AgentPresenceService) SetACWResolver(fn func(ctx context.Context, tenantID, agentID int64) int) {
+	s.acwResolver = fn
 }
 
 // validTransitions defines allowed state transitions.
@@ -487,6 +500,11 @@ func (s *AgentPresenceService) SetACW(ctx context.Context, agentID int64, dispos
 		return nil, err
 	}
 	p.DispositionCode = dispositionCode
+	if s.acwResolver != nil {
+		if seconds := s.acwResolver(ctx, p.TenantID, agentID); seconds > 0 {
+			p.ACWSeconds = seconds
+		}
+	}
 	p.UpdatedAt = time.Now()
 	if err := s.presence.Upsert(ctx, p); err != nil {
 		return nil, err

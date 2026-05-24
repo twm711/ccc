@@ -131,11 +131,12 @@ type RouterDeps struct {
 	TranscriptHub *transcripthub.Hub
 
 	// Infrastructure
-	RateLimiter       *redis.RateLimiter
-	AuditLogRepo      platform.AuditLogRepository
-	JWTSecret         string
-	ServiceAuthSecret string
-	Logger            zerolog.Logger
+	RateLimiter        *redis.RateLimiter
+	TenantSettingsRepo middleware.TenantRateProvider
+	AuditLogRepo       platform.AuditLogRepository
+	JWTSecret          string
+	ServiceAuthSecret  string
+	Logger             zerolog.Logger
 }
 
 func NewRouter(deps RouterDeps) *chi.Mux {
@@ -177,7 +178,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.Auth(deps.JWTSecret))
-		r.Use(middleware.RateLimit(deps.RateLimiter, 100))
+		r.Use(middleware.RateLimit(deps.RateLimiter, deps.TenantSettingsRepo, 100))
 		r.Use(middleware.AuditLog(deps.AuditLogRepo))
 
 		// --- Phase 0 Routes ---

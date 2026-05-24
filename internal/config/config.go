@@ -15,6 +15,14 @@ type Config struct {
 	FreeSWITCH  FreeSWITCHConfig
 	ServiceAuth ServiceAuthConfig
 	Storage     StorageConfig
+	NATS        NATSConfig
+}
+
+// NATSConfig points the lifecycle event publisher at a JetStream-enabled NATS
+// cluster. Empty URL disables event publishing (best-effort, no-op).
+type NATSConfig struct {
+	URL    string
+	Stream string
 }
 
 type FreeSWITCHConfig struct {
@@ -111,6 +119,10 @@ func Load() *Config {
 			SecretKey: envOr("STORAGE_SECRET_KEY", ""),
 			Bucket:    envOr("STORAGE_BUCKET", "ccc-recordings"),
 			UseSSL:    envOr("STORAGE_USE_SSL", "false") == "true",
+		},
+		NATS: NATSConfig{
+			URL:    envOr("NATS_URL", ""),
+			Stream: envOr("NATS_STREAM", "CCC_EVENTS"),
 		},
 		Aliyun: AliyunConfig{
 			AccessKeyID:     firstEnv("ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_ID"),

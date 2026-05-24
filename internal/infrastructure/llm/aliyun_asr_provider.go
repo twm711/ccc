@@ -8,15 +8,32 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 )
 
 // AliyunASRProvider implements ASRProvider using Aliyun NLS one-sentence recognition REST API.
 type AliyunASRProvider struct {
+	mu     sync.RWMutex
 	token  string
 	appKey string
 	region string
 	client *http.Client
+}
+
+// SetToken atomically swaps the NLS token used for subsequent requests.
+// Called by the background refresher in cmd/server/main.go before the
+// previous token expires.
+func (p *AliyunASRProvider) SetToken(token string) {
+	p.mu.Lock()
+	p.token = token
+	p.mu.Unlock()
+}
+
+func (p *AliyunASRProvider) currentToken() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.token
 }
 
 func NewAliyunASRProvider(token, appKey, region string) *AliyunASRProvider {
@@ -49,7 +66,7 @@ func (p *AliyunASRProvider) Transcribe(ctx context.Context, audioURL string) (st
 	if err != nil {
 		return "", fmt.Errorf("asr: create request: %w", err)
 	}
-	req.Header.Set("X-NLS-Token", p.token)
+	req.Header.Set("X-NLS-Token", p.currentToken())
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -98,7 +115,7 @@ func (p *AliyunASRProvider) TranscribeBytes(ctx context.Context, audio []byte, f
 	if err != nil {
 		return "", fmt.Errorf("asr: create request: %w", err)
 	}
-	req.Header.Set("X-NLS-Token", p.token)
+	req.Header.Set("X-NLS-Token", p.currentToken())
 	req.Header.Set("Content-Type", "application/octet-stream")
 
 	resp, err := p.client.Do(req)

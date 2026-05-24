@@ -22,6 +22,19 @@ type AgentNotifier interface {
 	NotifyAgent(agentID int64, eventType string, callID int64, payload interface{})
 }
 
+// EventPublisher pushes call/agent lifecycle events to an external bus
+// (typically NATS JetStream). Implementations must be safe for concurrent use
+// and should not block the caller; failures are best-effort.
+type EventPublisher interface {
+	Publish(ctx context.Context, subject string, data interface{}) error
+}
+
+// FamiliarAgentRecorder updates the per-caller "last agent" affinity cache so
+// the ACD familiar routing policy can prefer the same agent on repeat calls.
+type FamiliarAgentRecorder interface {
+	RememberAgent(ctx context.Context, tenantID int64, caller string, agentUserID int64, ttlDays int)
+}
+
 // Service orchestrates cross-domain side effects for call lifecycle events.
 type Service struct {
 	callSvc           *call.CallService
@@ -36,6 +49,9 @@ type Service struct {
 	notifier          AgentNotifier
 	ivrEngine         *ivr.Engine
 	campaignSvc       *campaign.CampaignService
+	publisher         EventPublisher
+	familiar          FamiliarAgentRecorder
+	familiarTTLDays   func(tenantID int64) int
 }
 
 func NewService(
@@ -74,6 +90,26 @@ func (s *Service) SetIVREngine(e *ivr.Engine) {
 
 func (s *Service) SetQueueSnapshotRepo(r call.QueueSnapshotRepository) {
 	s.queueSnapshotRepo = r
+}
+
+// SetEventPublisher wires an external bus (e.g. NATS) for call/agent events.
+// Without one, publishing is silently skipped.
+func (s *Service) SetEventPublisher(p EventPublisher) {
+	s.publisher = p
+}
+
+// SetFamiliarRecorder wires the ACD "last agent" cache. ttlDays returns the
+// retention window per tenant; callers typically read tenant_settings.familiar_agent_days.
+func (s *Service) SetFamiliarRecorder(rec FamiliarAgentRecorder, ttlDays func(tenantID int64) int) {
+	s.familiar = rec
+	s.familiarTTLDays = ttlDays
+}
+
+func (s *Service) publish(ctx context.Context, subject string, payload interface{}) {
+	if s.publisher == nil {
+		return
+	}
+	_ = s.publisher.Publish(ctx, subject, payload)
 }
 
 // EndCall ends a call and triggers all post-call side effects:
@@ -186,6 +222,19 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 		}
 	}
 
+	// Familiar-customer affinity: remember who served this caller for next time.
+	if s.familiar != nil && c.AgentUserID != nil && c.Direction == call.DirectionInbound && c.Caller != "" {
+		ttlDays := 30
+		if s.familiarTTLDays != nil {
+			if d := s.familiarTTLDays(c.TenantID); d > 0 {
+				ttlDays = d
+			}
+		}
+		s.familiar.RememberAgent(ctx, c.TenantID, c.Caller, *c.AgentUserID, ttlDays)
+	}
+
+	s.publish(ctx, "ccc.call.ended", c)
+
 	return c, nil
 }
 
@@ -239,6 +288,8 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 		})
 	}
 
+	s.publish(ctx, "ccc.call.answered", c)
+
 	return c, popData, nil
 }
 
@@ -281,6 +332,8 @@ func (s *Service) HandleInboundCall(ctx context.Context, in call.CreateCallInput
 			Timestamp: time.Now(),
 		})
 	}
+
+	s.publish(ctx, "ccc.call.created", c)
 
 	return c, nil
 }

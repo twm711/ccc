@@ -44,6 +44,7 @@ import (
 	"github.com/divord97/ccc/internal/infrastructure/esl"
 	"github.com/divord97/ccc/internal/infrastructure/llm"
 	infraMySQL "github.com/divord97/ccc/internal/infrastructure/mysql"
+	infraNATS "github.com/divord97/ccc/internal/infrastructure/nats"
 	infraRedis "github.com/divord97/ccc/internal/infrastructure/redis"
 	"github.com/divord97/ccc/internal/infrastructure/storage"
 	httpRouter "github.com/divord97/ccc/internal/interfaces/http"
@@ -173,6 +174,19 @@ func main() {
 		logger.Warn().Msg("ESL: FREESWITCH_HOST not set, telephony commands disabled")
 	}
 	agentPresenceSvc := identity.NewAgentPresenceService(agentPresenceRepo, agentPresenceLogRepo)
+	// Resolve effective ACW seconds for an agent: prefer agent.acw_seconds,
+	// then tenant_settings.default_acw_seconds. This wiring fixes a P1 defect
+	// where agent_presence rows never carried an ACWSeconds value, so the
+	// scheduled SetACW timeout never fired.
+	agentPresenceSvc.SetACWResolver(func(ctx context.Context, tenantID, agentID int64) int {
+		if a, err := agentRepo.GetByUserID(ctx, agentID); err == nil && a != nil && a.ACWSeconds > 0 {
+			return a.ACWSeconds
+		}
+		if ts, err := tenantSettingsRepo.GetByTenantID(ctx, tenantID); err == nil && ts != nil && ts.DefaultACWSeconds > 0 {
+			return ts.DefaultACWSeconds
+		}
+		return 0
+	})
 	routingSvc := telephony.NewRoutingService(routingRuleRepo)
 	cliSvc := telephony.NewCLIPolicyService(cliPolicyRepo, phoneNumberRepo)
 	dncSvc := integration.NewDNCService(dncRepo)
@@ -246,7 +260,16 @@ func main() {
 		Presence:   agentPresenceRepo,
 		Members:    skillGroupMemberRepo,
 		SkillGroup: skillGroupRepo,
+		Calls:      callRepo,
 		Logger:     logger,
+	})
+	// Familiar-customer affinity: lifecycle.EndCall records who served each
+	// inbound caller; ACD reads this cache on dispatch for routing_policy=familiar.
+	lifecycleSvc.SetFamiliarRecorder(acdSvc, func(tenantID int64) int {
+		if ts, err := tenantSettingsRepo.GetByTenantID(context.Background(), tenantID); err == nil && ts != nil && ts.FamiliarAgentDays > 0 {
+			return ts.FamiliarAgentDays
+		}
+		return 30
 	})
 	ivrEngine := ivr.DefaultEngine(eslClient, ivrFlowLoader, acdSvc)
 	lifecycleSvc.SetIVREngine(ivrEngine)
@@ -264,20 +287,26 @@ func main() {
 	// ASR/TTS Providers: use Aliyun NLS when appkey configured.
 	var asrProvider llm.ASRProvider
 	var ttsProvider llm.TTSProvider
+	var aliyunASR *llm.AliyunASRProvider
+	var aliyunTTS *llm.AliyunTTSProvider
+	var nlsExpireSec int64
 	if cfg.Aliyun.NLSAppKey != "" {
 		nlsToken := cfg.Aliyun.NLSToken
 		if nlsToken == "" && cfg.Aliyun.AccessKeyID != "" {
-			t, _, err := llm.FetchNLSToken(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret)
+			t, exp, err := llm.FetchNLSToken(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret)
 			if err != nil {
 				logger.Error().Err(err).Msg("ASR/TTS: failed to fetch NLS token")
 			} else {
 				nlsToken = t
-				logger.Info().Msg("ASR/TTS: NLS token obtained via AccessKey")
+				nlsExpireSec = exp
+				logger.Info().Int64("expire_at", exp).Msg("ASR/TTS: NLS token obtained via AccessKey")
 			}
 		}
 		if nlsToken != "" {
-			asrProvider = llm.NewAliyunASRProvider(nlsToken, cfg.Aliyun.NLSAppKey, cfg.Aliyun.STTRegion)
-			ttsProvider = llm.NewAliyunTTSProvider(nlsToken, cfg.Aliyun.NLSAppKey, cfg.Aliyun.STTRegion, cfg.Aliyun.TTSVoice, cfg.Aliyun.TTSSampleRate)
+			aliyunASR = llm.NewAliyunASRProvider(nlsToken, cfg.Aliyun.NLSAppKey, cfg.Aliyun.STTRegion)
+			aliyunTTS = llm.NewAliyunTTSProvider(nlsToken, cfg.Aliyun.NLSAppKey, cfg.Aliyun.STTRegion, cfg.Aliyun.TTSVoice, cfg.Aliyun.TTSSampleRate)
+			asrProvider = aliyunASR
+			ttsProvider = aliyunTTS
 			logger.Info().Str("appkey", cfg.Aliyun.NLSAppKey).Str("region", cfg.Aliyun.STTRegion).Msg("ASR/TTS: using Aliyun NLS providers")
 		} else {
 			logger.Warn().Msg("ASR/TTS: no NLS token available, ASR/TTS disabled")
@@ -287,6 +316,31 @@ func main() {
 	}
 	// Wire ASR provider into IVR engine for speech recognition nodes.
 	ivrEngine.SetASRProvider(asrProvider)
+
+	// NLS token refresher: Aliyun tokens expire (typically 24h). Refresh on a
+	// schedule derived from expireTime, falling back to 12h on parse failure.
+	if aliyunASR != nil && cfg.Aliyun.AccessKeyID != "" {
+		go runNLSRefresher(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret, nlsExpireSec, aliyunASR, aliyunTTS, logger)
+	}
+
+	// NATS event publisher (best-effort): publishes ccc.call.* and ccc.agent.*
+	// to JetStream so downstream consumers (analytics, BI, third-party CRM
+	// hooks) can subscribe without polling the DB.
+	if cfg.NATS.URL != "" {
+		natsClient, err := infraNATS.NewClient(infraNATS.Config{URL: cfg.NATS.URL, Logger: logger})
+		if err != nil {
+			logger.Error().Err(err).Msg("nats: connect failed, event publishing disabled")
+		} else {
+			if err := natsClient.EnsureStream(context.Background(), cfg.NATS.Stream, []string{"ccc.>"}); err != nil {
+				logger.Warn().Err(err).Str("stream", cfg.NATS.Stream).Msg("nats: ensure stream")
+			}
+			lifecycleSvc.SetEventPublisher(natsClient)
+			defer natsClient.Close()
+			logger.Info().Str("url", cfg.NATS.URL).Str("stream", cfg.NATS.Stream).Msg("nats: event publisher wired")
+		}
+	} else {
+		logger.Warn().Msg("nats: NATS_URL not set, event publishing disabled")
+	}
 
 	// --- Phase 9 Repositories ---
 	digitalEmployeeRepo := infraMySQL.NewDigitalEmployeeRepo(db)
@@ -573,6 +627,7 @@ func main() {
 		AgentHub:               agentHub,
 		TranscriptHub:          transcriptHub,
 		RateLimiter:            rateLimiter,
+		TenantSettingsRepo:     tenantSettingsRepo,
 		AuditLogRepo:           auditLogRepo,
 		JWTSecret:              cfg.JWT.Secret,
 		ServiceAuthSecret:      cfg.ServiceAuth.Secret,
@@ -653,4 +708,45 @@ func main() {
 		logger.Error().Err(err).Msg("server shutdown error")
 	}
 	logger.Info().Msg("server stopped")
+}
+
+// runNLSRefresher polls Aliyun NLS for a fresh token before the current one
+// expires, then atomically swaps it onto the ASR/TTS providers. Aliyun's REST
+// returns expireTime in seconds; we refresh ~5 min before. On failure we
+// retry every 5 minutes with the previous (still valid) token until success.
+func runNLSRefresher(accessKeyID, accessKeySecret string, expireSec int64, asr *llm.AliyunASRProvider, tts *llm.AliyunTTSProvider, logger zerolog.Logger) {
+	nextDelay := func(expSec int64) time.Duration {
+		if expSec <= 0 {
+			return 12 * time.Hour
+		}
+		// expireTime from Aliyun is "seconds since epoch" when token expires.
+		remain := time.Until(time.Unix(expSec, 0)) - 5*time.Minute
+		if remain < time.Minute {
+			return time.Minute
+		}
+		if remain > 23*time.Hour {
+			return 23 * time.Hour
+		}
+		return remain
+	}
+	exp := expireSec
+	for {
+		d := nextDelay(exp)
+		logger.Info().Dur("delay", d).Msg("nls: scheduling token refresh")
+		time.Sleep(d)
+		token, newExp, err := llm.FetchNLSToken(accessKeyID, accessKeySecret)
+		if err != nil {
+			logger.Error().Err(err).Msg("nls: token refresh failed; retrying in 5m")
+			exp = time.Now().Add(5 * time.Minute).Unix()
+			continue
+		}
+		if asr != nil {
+			asr.SetToken(token)
+		}
+		if tts != nil {
+			tts.SetToken(token)
+		}
+		exp = newExp
+		logger.Info().Int64("expire_at", newExp).Msg("nls: token refreshed")
+	}
 }

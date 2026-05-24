@@ -7,17 +7,32 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
 // AliyunTTSProvider implements TTSProvider using Aliyun NLS REST API.
 type AliyunTTSProvider struct {
+	mu         sync.RWMutex
 	token      string
 	appKey     string
 	region     string
 	voice      string
 	sampleRate int
 	client     *http.Client
+}
+
+// SetToken atomically swaps the NLS token used for subsequent requests.
+func (p *AliyunTTSProvider) SetToken(token string) {
+	p.mu.Lock()
+	p.token = token
+	p.mu.Unlock()
+}
+
+func (p *AliyunTTSProvider) currentToken() string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.token
 }
 
 func NewAliyunTTSProvider(token, appKey, region, voice string, sampleRate int) *AliyunTTSProvider {
@@ -61,7 +76,7 @@ func (p *AliyunTTSProvider) Synthesize(ctx context.Context, text string, voice s
 		return nil, fmt.Errorf("tts: create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-NLS-Token", p.token)
+	req.Header.Set("X-NLS-Token", p.currentToken())
 
 	resp, err := p.client.Do(req)
 	if err != nil {
