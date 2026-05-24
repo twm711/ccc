@@ -59,4 +59,10 @@ func (r *SocialChannelConfigRepo) Delete(ctx context.Context, id int64) error {
 	return err
 }
 
+func (r *SocialChannelConfigRepo) ListByTenantID(ctx context.Context, tenantID int64) ([]*im.SocialChannelConfig, error) {
+	var items []*im.SocialChannelConfig
+	err := r.db.SelectContext(ctx, &items, "SELECT * FROM social_channel_configs WHERE tenant_id=? ORDER BY created_at DESC", tenantID)
+	return items, err
+}
+
 var _ im.SocialChannelConfigRepository = (*SocialChannelConfigRepo)(nil)

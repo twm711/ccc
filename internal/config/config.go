@@ -6,12 +6,20 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig
-	Database  DatabaseConfig
-	Redis     RedisConfig
-	JWT       JWTConfig
-	Snowflake SnowflakeConfig
-	Aliyun    AliyunConfig
+	Server      ServerConfig
+	Database    DatabaseConfig
+	Redis       RedisConfig
+	JWT         JWTConfig
+	Snowflake   SnowflakeConfig
+	Aliyun      AliyunConfig
+	FreeSWITCH  FreeSWITCHConfig
+}
+
+type FreeSWITCHConfig struct {
+	Host     string
+	Port     int
+	Password string
+	PoolSize int
 }
 
 type ServerConfig struct {
@@ -64,6 +72,12 @@ func Load() *Config {
 		},
 		Snowflake: SnowflakeConfig{
 			NodeID: int64(envOrInt("SNOWFLAKE_NODE_ID", 1)),
+		},
+		FreeSWITCH: FreeSWITCHConfig{
+			Host:     envOr("FREESWITCH_HOST", ""),
+			Port:     envOrInt("FREESWITCH_PORT", 8021),
+			Password: envOr("FREESWITCH_PASSWORD", "ClueCon"),
+			PoolSize: envOrInt("FREESWITCH_POOL_SIZE", 5),
 		},
 		Aliyun: AliyunConfig{
 			AccessKeyID:     envOr("ALIYUN_ACCESS_KEY_ID", ""),

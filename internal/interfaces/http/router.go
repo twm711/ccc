@@ -90,6 +90,14 @@ type RouterDeps struct {
 	RingSvc       *ai.RingAnalysisService
 	FullDuplexSvc *ai.FullDuplexService
 
+	// Config
+	BreakReasonHandler      *handler.BreakReasonHandler
+	DispositionCodeHandler  *handler.DispositionCodeHandler
+	AudioFileHandler        *handler.AudioFileHandler
+	BusinessHoursHandler    *handler.BusinessHoursHandler
+	CallTagDefHandler       *handler.CallTagDefHandler
+	AuditLogHandler         *handler.AuditLogHandler
+
 	// Social Channels
 	SocialChannelHandler *handler.SocialChannelHandler
 
@@ -581,10 +589,55 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Get("/full-duplex/config", handler.GetFullDuplexConfig(deps.FullDuplexSvc))
 		r.Put("/full-duplex/config", handler.UpsertFullDuplexConfig(deps.FullDuplexSvc))
 
+		// --- Config Routes ---
+		r.Route("/break-reasons", func(r chi.Router) {
+			r.Post("/", deps.BreakReasonHandler.Create)
+			r.Get("/", deps.BreakReasonHandler.List)
+			r.Get("/{id}", deps.BreakReasonHandler.Get)
+			r.Put("/{id}", deps.BreakReasonHandler.Update)
+			r.Delete("/{id}", deps.BreakReasonHandler.Delete)
+		})
+
+		r.Route("/disposition-codes", func(r chi.Router) {
+			r.Post("/", deps.DispositionCodeHandler.Create)
+			r.Get("/", deps.DispositionCodeHandler.List)
+			r.Get("/{id}", deps.DispositionCodeHandler.Get)
+			r.Put("/{id}", deps.DispositionCodeHandler.Update)
+			r.Delete("/{id}", deps.DispositionCodeHandler.Delete)
+		})
+
+		r.Route("/audio-files", func(r chi.Router) {
+			r.Post("/", deps.AudioFileHandler.Create)
+			r.Get("/", deps.AudioFileHandler.List)
+			r.Get("/{id}", deps.AudioFileHandler.Get)
+			r.Delete("/{id}", deps.AudioFileHandler.Delete)
+		})
+
+		r.Route("/business-hours", func(r chi.Router) {
+			r.Post("/", deps.BusinessHoursHandler.Create)
+			r.Get("/", deps.BusinessHoursHandler.List)
+			r.Get("/{id}", deps.BusinessHoursHandler.Get)
+			r.Put("/{id}", deps.BusinessHoursHandler.Update)
+			r.Delete("/{id}", deps.BusinessHoursHandler.Delete)
+		})
+
+		r.Route("/call-tags", func(r chi.Router) {
+			r.Post("/", deps.CallTagDefHandler.Create)
+			r.Get("/", deps.CallTagDefHandler.List)
+			r.Get("/{id}", deps.CallTagDefHandler.Get)
+			r.Delete("/{id}", deps.CallTagDefHandler.Delete)
+		})
+
+		r.Route("/audit-logs", func(r chi.Router) {
+			r.Get("/", deps.AuditLogHandler.List)
+		})
+
 		// --- Social Channel Config ---
 		r.Route("/social-configs", func(r chi.Router) {
 			r.Post("/", deps.SocialChannelHandler.CreateConfig)
+			r.Get("/", deps.SocialChannelHandler.ListConfigs)
 			r.Get("/channels/{channelID}", deps.SocialChannelHandler.GetConfig)
+			r.Put("/channels/{channelID}", deps.SocialChannelHandler.UpdateConfig)
 			r.Delete("/{id}", deps.SocialChannelHandler.DeleteConfig)
 		})
 	})

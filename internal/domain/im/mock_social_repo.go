@@ -57,3 +57,15 @@ func (m *MockSocialChannelConfigRepo) Delete(_ context.Context, id int64) error 
 	delete(m.items, id)
 	return nil
 }
+
+func (m *MockSocialChannelConfigRepo) ListByTenantID(_ context.Context, tenantID int64) ([]*SocialChannelConfig, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var result []*SocialChannelConfig
+	for _, c := range m.items {
+		if c.TenantID == tenantID {
+			result = append(result, c)
+		}
+	}
+	return result, nil
+}

@@ -24,6 +24,7 @@ import (
 	"github.com/divord97/ccc/internal/domain/routing"
 	"github.com/divord97/ccc/internal/domain/telephony"
 	"github.com/divord97/ccc/internal/domain/ticket"
+	"github.com/divord97/ccc/internal/infrastructure/esl"
 	"github.com/divord97/ccc/internal/infrastructure/llm"
 	infraMySQL "github.com/divord97/ccc/internal/infrastructure/mysql"
 	infraRedis "github.com/divord97/ccc/internal/infrastructure/redis"
@@ -70,6 +71,16 @@ func main() {
 	voicemailRepo := infraMySQL.NewVoicemailRepo(db)
 	callNumberTagRepo := infraMySQL.NewCallNumberTagRepo(db)
 	autoTagRuleRepo := infraMySQL.NewAutoTagRuleRepo(db)
+
+	// --- Config Repositories ---
+	breakReasonRepo := infraMySQL.NewBreakReasonRepo(db)
+	dispositionCodeRepo := infraMySQL.NewDispositionCodeRepo(db)
+	callTagDefRepo := infraMySQL.NewCallTagDefRepo(db)
+	audioFileRepo := infraMySQL.NewAudioFileRepo(db)
+	businessHoursRepo := infraMySQL.NewBusinessHoursRepo(db)
+	businessHoursScheduleRepo := infraMySQL.NewBusinessHoursScheduleRepo(db)
+	queueSnapshotRepo := infraMySQL.NewQueueSnapshotRepo(db)
+	_ = queueSnapshotRepo // available for queue monitoring
 
 	// --- Phase 2 Repositories ---
 	callRepo := infraMySQL.NewCallRepo(db)
@@ -126,6 +137,21 @@ func main() {
 	skillGroupSvc := identity.NewSkillGroupService(skillGroupRepo, skillGroupMemberRepo)
 	ivrFlowSvc := routing.NewIVRFlowService(ivrFlowRepo, ivrFlowVersionRepo)
 	callSvc := call.NewCallService(callRepo, callEventRepo, ivrTrackingRepo, callbackRepo)
+
+	// ESL Client: connect to FreeSWITCH when host is configured.
+	if cfg.FreeSWITCH.Host != "" {
+		eslClient := esl.NewClient(esl.Config{
+			Host:     cfg.FreeSWITCH.Host,
+			Port:     cfg.FreeSWITCH.Port,
+			Password: cfg.FreeSWITCH.Password,
+			PoolSize: cfg.FreeSWITCH.PoolSize,
+			Logger:   logger,
+		})
+		callSvc.SetTelephonyProvider(esl.NewTelephonyAdapter(eslClient))
+		logger.Info().Str("host", cfg.FreeSWITCH.Host).Msg("ESL: FreeSWITCH telephony provider configured")
+	} else {
+		logger.Warn().Msg("ESL: FREESWITCH_HOST not set, telephony commands disabled")
+	}
 	agentPresenceSvc := identity.NewAgentPresenceService(agentPresenceRepo, agentPresenceLogRepo)
 	routingSvc := telephony.NewRoutingService(routingRuleRepo)
 	cliSvc := telephony.NewCLIPolicyService(cliPolicyRepo, phoneNumberRepo)
@@ -261,6 +287,14 @@ func main() {
 	asrHotwordsHandler := handler.NewASRHotwordsHandler(asrHotwordsSvc)
 	performanceHandler := handler.NewPerformanceHandler(performanceSvc)
 
+	// Config Handlers
+	breakReasonHandler := handler.NewBreakReasonHandler(breakReasonRepo)
+	dispositionCodeHandler := handler.NewDispositionCodeHandler(dispositionCodeRepo)
+	audioFileHandler := handler.NewAudioFileHandler(audioFileRepo)
+	businessHoursHandler := handler.NewBusinessHoursHandler(businessHoursRepo, businessHoursScheduleRepo)
+	callTagDefHandler := handler.NewCallTagDefHandler(callTagDefRepo)
+	auditLogHandler := handler.NewAuditLogHandler(auditLogRepo)
+
 	// Social Channels
 	socialChannelHandler := handler.NewSocialChannelHandler(socialChannelSvc)
 
@@ -317,20 +351,19 @@ func main() {
 		trainingProv = llm.NewStubTrainingProvider()
 		logger.Warn().Msg("Advanced AI: DASHSCOPE_API_KEY not set, using stub providers")
 	}
-	_ = commAgentProv
-	_ = voiceCloneProv
-	_ = convAnalyticsProv
-	_ = ringAnalysisProv
-	_ = fullDuplexProv
-	_ = trainingProv
-
 	// Advanced AI Domain Services
 	commAgentSvc := ai.NewCommAgentService(commAgentRepo, commAgentSessionRepo)
+	commAgentSvc.SetProvider(commAgentProv)
 	voiceProfileSvc := ai.NewVoiceProfileService(voiceProfileRepo)
+	voiceProfileSvc.SetProvider(voiceCloneProv)
 	conversationAnalysisSvc := ai.NewConversationAnalysisService(analysisTaskRepo)
+	conversationAnalysisSvc.SetProvider(convAnalyticsProv)
 	trainingSvc := ai.NewTrainingService(trainingCourseRepo, trainingExamRepo, simulatedCallRepo)
+	trainingSvc.SetProvider(trainingProv)
 	ringAnalysisSvc := ai.NewRingAnalysisService(ringAnalysisConfigRepo, ringAnalysisLogRepo)
+	ringAnalysisSvc.SetProvider(ringAnalysisProv)
 	fullDuplexSvc := ai.NewFullDuplexService(fullDuplexConfigRepo)
+	fullDuplexSvc.SetProvider(fullDuplexProv)
 
 	// --- Router ---
 	router := httpRouter.NewRouter(httpRouter.RouterDeps{
@@ -387,6 +420,12 @@ func main() {
 		TrainingSvc:            trainingSvc,
 		RingSvc:                ringAnalysisSvc,
 		FullDuplexSvc:          fullDuplexSvc,
+		BreakReasonHandler:     breakReasonHandler,
+		DispositionCodeHandler: dispositionCodeHandler,
+		AudioFileHandler:       audioFileHandler,
+		BusinessHoursHandler:   businessHoursHandler,
+		CallTagDefHandler:      callTagDefHandler,
+		AuditLogHandler:        auditLogHandler,
 		SocialChannelHandler:  socialChannelHandler,
 		RateLimiter:          rateLimiter,
 		AuditLogRepo:         auditLogRepo,

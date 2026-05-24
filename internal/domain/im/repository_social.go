@@ -8,4 +8,5 @@ type SocialChannelConfigRepository interface {
 	GetByPlatformAndAppID(ctx context.Context, platform SocialPlatform, appID string) (*SocialChannelConfig, error)
 	Update(ctx context.Context, c *SocialChannelConfig) error
 	Delete(ctx context.Context, id int64) error
+	ListByTenantID(ctx context.Context, tenantID int64) ([]*SocialChannelConfig, error)
 }

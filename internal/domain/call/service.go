@@ -8,11 +8,25 @@ import (
 	"github.com/divord97/ccc/pkg/snowflake"
 )
 
+// TelephonyProvider issues telephony commands to the media layer (e.g. ESL).
+type TelephonyProvider interface {
+	Originate(ctx context.Context, dest, callerID, eslContext string) (string, error)
+	Hangup(ctx context.Context, uuid string) error
+	Hold(ctx context.Context, uuid string) error
+	Retrieve(ctx context.Context, uuid string) error
+	Transfer(ctx context.Context, uuid, dest string) error
+	SendDTMF(ctx context.Context, uuid, digits string) error
+	Bridge(ctx context.Context, uuid1, uuid2 string) error
+	Eavesdrop(ctx context.Context, spyUUID, targetUUID string) error
+	Conference(ctx context.Context, uuid, confName string) error
+}
+
 type CallService struct {
 	calls     CallRepository
 	events    CallEventRepository
 	tracking  IVRTrackingRepository
 	callbacks CallbackRequestRepository
+	tp        TelephonyProvider
 }
 
 func NewCallService(cr CallRepository, er CallEventRepository, tr IVRTrackingRepository, cbr ...CallbackRequestRepository) *CallService {
@@ -21,6 +35,10 @@ func NewCallService(cr CallRepository, er CallEventRepository, tr IVRTrackingRep
 		s.callbacks = cbr[0]
 	}
 	return s
+}
+
+func (s *CallService) SetTelephonyProvider(tp TelephonyProvider) {
+	s.tp = tp
 }
 
 type CreateCallInput struct {
@@ -256,6 +274,9 @@ func (s *CallService) HoldCall(ctx context.Context, id int64) (*Call, error) {
 	}
 	c.Status = CallStatusHeld
 	c.HoldCount++
+	if s.tp != nil {
+		_ = s.tp.Hold(ctx, fmt.Sprintf("%d", c.ID))
+	}
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err
 	}
@@ -276,6 +297,9 @@ func (s *CallService) RetrieveCall(ctx context.Context, id int64) (*Call, error)
 		return nil, ErrCallNotHeld
 	}
 	c.Status = CallStatusActive
+	if s.tp != nil {
+		_ = s.tp.Retrieve(ctx, fmt.Sprintf("%d", c.ID))
+	}
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err
 	}
@@ -311,6 +335,9 @@ func (s *CallService) BlindTransfer(ctx context.Context, id int64, target Transf
 	if target.ExternalNum != "" {
 		detail += ":" + target.ExternalNum
 	}
+	if s.tp != nil {
+		_ = s.tp.Transfer(ctx, fmt.Sprintf("%d", c.ID), detail)
+	}
 
 	if err := s.calls.Update(ctx, c); err != nil {
 		return nil, err
@@ -333,6 +360,9 @@ func (s *CallService) SendDTMF(ctx context.Context, id int64, digits string) err
 	}
 	if c.Status == CallStatusCompleted || c.Status == CallStatusFailed {
 		return ErrCallAlreadyEnded
+	}
+	if s.tp != nil {
+		_ = s.tp.SendDTMF(ctx, fmt.Sprintf("%d", c.ID), digits)
 	}
 	_ = s.events.Create(ctx, &CallEvent{
 		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,

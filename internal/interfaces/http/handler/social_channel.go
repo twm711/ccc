@@ -45,6 +45,37 @@ func (h *SocialChannelHandler) GetConfig(w http.ResponseWriter, r *http.Request)
 	response.JSON(w, 200, cfg)
 }
 
+// UpdateConfig updates a social channel config.
+func (h *SocialChannelHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
+	channelID, _ := strconv.ParseInt(chi.URLParam(r, "channelID"), 10, 64)
+	var in im.UpdateSocialConfigInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, 400, err.Error())
+		return
+	}
+	cfg, err := h.svc.UpdateConfig(r.Context(), channelID, in)
+	if err != nil {
+		response.Error(w, 422, err.Error())
+		return
+	}
+	response.JSON(w, 200, cfg)
+}
+
+// ListConfigs lists all social channel configs for the tenant.
+func (h *SocialChannelHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
+	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	if tenantID == 0 {
+		response.Error(w, 400, "tenant_id is required")
+		return
+	}
+	items, err := h.svc.ListConfigs(r.Context(), tenantID)
+	if err != nil {
+		response.Error(w, 500, err.Error())
+		return
+	}
+	response.JSON(w, 200, items)
+}
+
 // DeleteConfig removes a social channel config.
 func (h *SocialChannelHandler) DeleteConfig(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)

@@ -119,6 +119,44 @@ func (s *SocialChannelService) DeleteConfig(ctx context.Context, id int64) error
 	return s.configs.Delete(ctx, id)
 }
 
+type UpdateSocialConfigInput struct {
+	AppID          *string `json:"app_id"`
+	AppSecret      *string `json:"app_secret"`
+	Token          *string `json:"token"`
+	EncodingAESKey *string `json:"encoding_aes_key"`
+}
+
+func (s *SocialChannelService) UpdateConfig(ctx context.Context, channelID int64, in UpdateSocialConfigInput) (*SocialChannelConfig, error) {
+	cfg, err := s.configs.GetByChannelID(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil {
+		return nil, ErrSocialConfigNotFound
+	}
+	if in.AppID != nil {
+		cfg.AppID = *in.AppID
+	}
+	if in.AppSecret != nil {
+		cfg.AppSecret = *in.AppSecret
+	}
+	if in.Token != nil {
+		cfg.Token = *in.Token
+	}
+	if in.EncodingAESKey != nil {
+		cfg.EncodingAESKey = *in.EncodingAESKey
+	}
+	cfg.UpdatedAt = time.Now()
+	if err := s.configs.Update(ctx, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (s *SocialChannelService) ListConfigs(ctx context.Context, tenantID int64) ([]*SocialChannelConfig, error) {
+	return s.configs.ListByTenantID(ctx, tenantID)
+}
+
 // VerifyWeChatSignature validates a WeChat server verification request.
 // WeChat sends signature=sha1(sort(token, timestamp, nonce)).
 func (s *SocialChannelService) VerifyWeChatSignature(token, timestamp, nonce, signature string) bool {
