@@ -67,15 +67,20 @@ func (h *ReportHandler) AgentReport(w http.ResponseWriter, r *http.Request) {
 
 func (h *ReportHandler) AgentReportExport(w http.ResponseWriter, r *http.Request) {
 	f := parseReportFilter(r)
-	f.Limit = 10000
-	items, _, err := h.svc.AgentReport(r.Context(), f)
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=agent_report.csv")
-	_ = export.WriteAgentReportCSV(w, items)
+	streamExport(w, r, func(offset, limit int) (int, error) {
+		f.Offset = offset
+		f.Limit = limit
+		items, _, err := h.svc.AgentReport(r.Context(), f)
+		if err != nil {
+			return 0, err
+		}
+		if err := export.WriteAgentReportCSV(w, items); err != nil {
+			return 0, err
+		}
+		return len(items), nil
+	})
 }
 
 func (h *ReportHandler) GroupAgentReport(w http.ResponseWriter, r *http.Request) {
@@ -90,15 +95,20 @@ func (h *ReportHandler) GroupAgentReport(w http.ResponseWriter, r *http.Request)
 
 func (h *ReportHandler) GroupAgentReportExport(w http.ResponseWriter, r *http.Request) {
 	f := parseReportFilter(r)
-	f.Limit = 10000
-	items, _, err := h.svc.GroupAgentReport(r.Context(), f)
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=group_agent_report.csv")
-	_ = export.WriteGroupAgentReportCSV(w, items)
+	streamExport(w, r, func(offset, limit int) (int, error) {
+		f.Offset = offset
+		f.Limit = limit
+		items, _, err := h.svc.GroupAgentReport(r.Context(), f)
+		if err != nil {
+			return 0, err
+		}
+		if err := export.WriteGroupAgentReportCSV(w, items); err != nil {
+			return 0, err
+		}
+		return len(items), nil
+	})
 }
 
 func (h *ReportHandler) SkillGroupReport(w http.ResponseWriter, r *http.Request) {
@@ -113,15 +123,20 @@ func (h *ReportHandler) SkillGroupReport(w http.ResponseWriter, r *http.Request)
 
 func (h *ReportHandler) SkillGroupReportExport(w http.ResponseWriter, r *http.Request) {
 	f := parseReportFilter(r)
-	f.Limit = 10000
-	items, _, err := h.svc.SkillGroupReport(r.Context(), f)
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=skill_group_report.csv")
-	_ = export.WriteSkillGroupReportCSV(w, items)
+	streamExport(w, r, func(offset, limit int) (int, error) {
+		f.Offset = offset
+		f.Limit = limit
+		items, _, err := h.svc.SkillGroupReport(r.Context(), f)
+		if err != nil {
+			return 0, err
+		}
+		if err := export.WriteSkillGroupReportCSV(w, items); err != nil {
+			return 0, err
+		}
+		return len(items), nil
+	})
 }
 
 func (h *ReportHandler) Back2BackReport(w http.ResponseWriter, r *http.Request) {
@@ -157,16 +172,45 @@ func (h *ReportHandler) AgentStatusLog(w http.ResponseWriter, r *http.Request) {
 
 func (h *ReportHandler) AgentStatusLogExport(w http.ResponseWriter, r *http.Request) {
 	f := parseReportFilter(r)
-	f.Limit = 10000
 	breakReason := r.URL.Query().Get("break_reason_code")
-	items, _, err := h.svc.AgentStatusLogQuery(r.Context(), f, breakReason)
-	if err != nil {
-		response.Error(w, http.StatusInternalServerError, err.Error())
-		return
-	}
 	w.Header().Set("Content-Type", "text/csv")
 	w.Header().Set("Content-Disposition", "attachment; filename=agent_status_log.csv")
-	_ = export.WriteAgentStatusLogCSV(w, items)
+	streamExport(w, r, func(offset, limit int) (int, error) {
+		f.Offset = offset
+		f.Limit = limit
+		items, _, err := h.svc.AgentStatusLogQuery(r.Context(), f, breakReason)
+		if err != nil {
+			return 0, err
+		}
+		if err := export.WriteAgentStatusLogCSV(w, items); err != nil {
+			return 0, err
+		}
+		return len(items), nil
+	})
+}
+
+const exportBatchSize = 500
+
+// streamExport fetches data in batches and flushes to the client after each batch.
+func streamExport(w http.ResponseWriter, r *http.Request, fetchBatch func(offset, limit int) (int, error)) {
+	flusher, _ := w.(http.Flusher)
+	offset := 0
+	for {
+		if r.Context().Err() != nil {
+			return
+		}
+		n, err := fetchBatch(offset, exportBatchSize)
+		if err != nil {
+			return
+		}
+		if flusher != nil {
+			flusher.Flush()
+		}
+		if n < exportBatchSize {
+			return
+		}
+		offset += n
+	}
 }
 
 func (h *ReportHandler) CampaignReport(w http.ResponseWriter, r *http.Request) {

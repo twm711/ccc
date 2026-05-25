@@ -90,7 +90,7 @@ func (h *Hub) broadcastAll(ctx context.Context) {
 		select {
 		case c.Send <- data:
 		default:
-			// Client send buffer full, skip
+			h.logger.Warn().Int64("tenant_id", c.TenantID).Msg("dashboard ws: send buffer full, dropping")
 		}
 	}
 }

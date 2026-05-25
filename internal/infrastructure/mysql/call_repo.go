@@ -114,6 +114,55 @@ func (r *CallRepo) ListWithFilter(ctx context.Context, tenantID int64, filter ca
 	return calls, total, err
 }
 
+// ListWithCursor uses keyset pagination (WHERE id < cursor) for efficient deep paging.
+func (r *CallRepo) ListWithCursor(ctx context.Context, tenantID int64, filter call.CallListFilter, cursor int64, limit int) ([]*call.Call, error) {
+	where := "WHERE tenant_id = ?"
+	args := []interface{}{tenantID}
+
+	if cursor > 0 {
+		where += " AND id < ?"
+		args = append(args, cursor)
+	}
+	if filter.Direction != nil {
+		where += " AND direction = ?"
+		args = append(args, *filter.Direction)
+	}
+	if filter.CallType != nil {
+		where += " AND call_type = ?"
+		args = append(args, *filter.CallType)
+	}
+	if filter.MediaType != nil {
+		where += " AND media_type = ?"
+		args = append(args, *filter.MediaType)
+	}
+	if filter.Status != nil {
+		where += " AND status = ?"
+		args = append(args, *filter.Status)
+	}
+	if filter.Caller != "" {
+		where += " AND caller LIKE ?"
+		args = append(args, "%"+filter.Caller+"%")
+	}
+	if filter.Callee != "" {
+		where += " AND callee LIKE ?"
+		args = append(args, "%"+filter.Callee+"%")
+	}
+	if filter.StartFrom != nil {
+		where += " AND started_at >= ?"
+		args = append(args, *filter.StartFrom)
+	}
+	if filter.StartTo != nil {
+		where += " AND started_at <= ?"
+		args = append(args, *filter.StartTo)
+	}
+
+	args = append(args, limit)
+	var calls []*call.Call
+	err := r.db.SelectContext(ctx, &calls,
+		"SELECT * FROM calls "+where+" ORDER BY id DESC LIMIT ?", args...)
+	return calls, err
+}
+
 // CallEventRepo
 
 type CallEventRepo struct {

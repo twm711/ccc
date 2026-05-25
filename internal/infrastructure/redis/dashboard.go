@@ -57,7 +57,7 @@ func (r *DashboardRepo) GetOverview(ctx context.Context, tenantID int64) (*repor
 	return o, nil
 }
 
-// UpdateOverview writes dashboard metrics to Redis HASH.
+// UpdateOverview atomically replaces all dashboard metrics via pipeline DEL+HSET.
 func (r *DashboardRepo) UpdateOverview(ctx context.Context, o *report.DashboardOverview) error {
 	key := dashboardKey(o.TenantID)
 	fields := map[string]interface{}{
@@ -79,7 +79,12 @@ func (r *DashboardRepo) UpdateOverview(ctx context.Context, o *report.DashboardO
 		"agents_dialing":    o.AgentsDialing,
 		"longest_wait_sec":  o.LongestWaitSec,
 	}
-	return r.client.HSet(ctx, key, fields).Err()
+	pipe := r.client.TxPipeline()
+	pipe.Del(ctx, key)
+	pipe.HSet(ctx, key, fields)
+	pipe.Expire(ctx, key, 5*time.Minute)
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (r *DashboardRepo) GetCallFunnel(ctx context.Context, tenantID int64) (*report.CallFunnel, error) {

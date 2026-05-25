@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/divord97/ccc/internal/infrastructure/llm"
+	"github.com/divord97/ccc/pkg/redact"
 	"github.com/divord97/ccc/pkg/response"
 )
 
@@ -38,7 +39,7 @@ func (h *STTHandler) Transcribe(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	response.JSON(w, http.StatusOK, map[string]string{"text": text})
+	response.JSON(w, http.StatusOK, map[string]string{"text": redact.Text(text)})
 }
 
 // TTSHandler provides a REST endpoint for text-to-speech synthesis.

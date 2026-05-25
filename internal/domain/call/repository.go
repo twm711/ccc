@@ -23,6 +23,7 @@ type CallRepository interface {
 	Update(ctx context.Context, c *Call) error
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*Call, int64, error)
 	ListWithFilter(ctx context.Context, tenantID int64, filter CallListFilter, offset, limit int) ([]*Call, int64, error)
+	ListWithCursor(ctx context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error)
 }
 
 type CallEventRepository interface {

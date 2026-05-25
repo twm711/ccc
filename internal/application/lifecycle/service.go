@@ -204,6 +204,10 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 	// Post-call hooks run asynchronously to avoid blocking the call teardown path.
 	go s.postCallHooksAsync(c)
 
+	if c.AnsweredAt == nil && c.Direction == call.DirectionInbound {
+		metrics.CallsAbandoned.Inc()
+	}
+
 	if s.concurrency != nil {
 		s.concurrency.Release(ctx, c.TenantID)
 	}
@@ -213,6 +217,7 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 	}
 	metrics.CallsEnded.WithLabelValues(hangupByLabel).Inc()
 	metrics.ActiveCallsGauge.Dec()
+	metrics.TenantActiveCalls.WithLabelValues(fmt.Sprintf("%d", c.TenantID)).Dec()
 
 	s.publish(ctx, "ccc.call.ended", c)
 
@@ -250,6 +255,19 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// SLO: track answer latency and SLA compliance
+	if c.AnsweredAt != nil {
+		latency := c.AnsweredAt.Sub(c.StartedAt).Seconds()
+		metrics.CallAnswerLatency.Observe(latency)
+		if latency <= 20 {
+			metrics.SLAMet.Inc()
+		} else {
+			metrics.SLAMissed.Inc()
+		}
+	}
+	tenantStr := fmt.Sprintf("%d", c.TenantID)
+	metrics.TenantActiveCalls.WithLabelValues(tenantStr).Inc()
 
 	// Agent → Talking state
 	if s.presenceSvc != nil {

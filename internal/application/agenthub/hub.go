@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/divord97/ccc/pkg/metrics"
 	"github.com/divord97/ccc/pkg/wsutil"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
@@ -63,6 +64,7 @@ func (h *Hub) Register(c *Client) {
 		h.clients[c.AgentID] = make(map[*Client]bool)
 	}
 	h.clients[c.AgentID][c] = true
+	metrics.WSActiveConnections.WithLabelValues("agent").Inc()
 }
 
 func (h *Hub) Unregister(c *Client) {
@@ -75,6 +77,7 @@ func (h *Hub) Unregister(c *Client) {
 		}
 	}
 	close(c.Send)
+	metrics.WSActiveConnections.WithLabelValues("agent").Dec()
 }
 
 // NotifyAgent implements lifecycle.AgentNotifier.
@@ -93,6 +96,7 @@ func (h *Hub) SendToAgent(agentID int64, event Event) {
 		select {
 		case c.Send <- data:
 		default:
+			h.logger.Warn().Int64("agent_id", agentID).Msg("ws: send buffer full, dropping message")
 		}
 	}
 }

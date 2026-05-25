@@ -390,6 +390,11 @@ func (s *CallService) ListCalls(ctx context.Context, tenantID int64, filter Call
 	return s.calls.ListWithFilter(ctx, tenantID, filter, offset, limit)
 }
 
+// ListCallsWithCursor uses keyset pagination for efficient deep paging.
+func (s *CallService) ListCallsWithCursor(ctx context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error) {
+	return s.calls.ListWithCursor(ctx, tenantID, filter, cursor, limit)
+}
+
 func (s *CallService) GetIVRTracking(ctx context.Context, callID int64) ([]*IVRTracking, error) {
 	return s.tracking.ListByCallID(ctx, callID)
 }

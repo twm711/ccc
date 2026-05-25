@@ -149,6 +149,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r.Use(middleware.RequestLogger(deps.Logger))
 
 	r.Get("/health", handler.Health)
+	r.Get("/readyz", handler.Readyz)
 	r.Handle("/metrics", promhttp.Handler())
 
 	// --- Public Auth Route (no JWT) ---
@@ -297,6 +298,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Route("/calls", func(r chi.Router) {
 			r.Get("/", deps.CallHandler.List)
+			r.Get("/cursor", deps.CallHandler.ListCursor)
 			r.Get("/{id}", deps.CallHandler.Get)
 			r.Get("/{id}/events", deps.CallHandler.GetEvents)
 			r.Get("/{id}/ivr-tracking", deps.CallHandler.GetIVRTracking)

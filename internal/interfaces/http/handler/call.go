@@ -72,6 +72,49 @@ func (h *CallHandler) List(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]interface{}{"items": calls, "total": total})
 }
 
+func (h *CallHandler) ListCursor(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	cursor, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	filter := call.CallListFilter{
+		Caller: r.URL.Query().Get("caller"),
+		Callee: r.URL.Query().Get("callee"),
+	}
+	if d := r.URL.Query().Get("direction"); d != "" {
+		dir := call.CallDirection(d)
+		filter.Direction = &dir
+	}
+	if s := r.URL.Query().Get("status"); s != "" {
+		status := call.CallStatus(s)
+		filter.Status = &status
+	}
+	if sf := r.URL.Query().Get("start_from"); sf != "" {
+		if t, err := time.Parse(time.RFC3339, sf); err == nil {
+			filter.StartFrom = &t
+		}
+	}
+	if st := r.URL.Query().Get("start_to"); st != "" {
+		if t, err := time.Parse(time.RFC3339, st); err == nil {
+			filter.StartTo = &t
+		}
+	}
+
+	calls, err := h.callSvc.ListCallsWithCursor(r.Context(), tenantID, filter, cursor, limit)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var nextCursor int64
+	if len(calls) == limit {
+		nextCursor = calls[len(calls)-1].ID
+	}
+	response.JSON(w, http.StatusOK, map[string]interface{}{"items": calls, "next_cursor": nextCursor})
+}
+
 func (h *CallHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	c, err := h.callSvc.GetByID(r.Context(), id)

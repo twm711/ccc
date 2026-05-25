@@ -85,6 +85,28 @@ func (r *MockCallRepo) ListWithFilter(_ context.Context, tenantID int64, filter 
 	return filtered[offset:end], total, nil
 }
 
+func (r *MockCallRepo) ListWithCursor(_ context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var filtered []*Call
+	for _, c := range r.calls {
+		if c.TenantID != tenantID {
+			continue
+		}
+		if cursor > 0 && c.ID >= cursor {
+			continue
+		}
+		if filter.Direction != nil && c.Direction != *filter.Direction {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
+}
+
 type MockCallEventRepo struct {
 	mu     sync.RWMutex
 	events []*CallEvent
