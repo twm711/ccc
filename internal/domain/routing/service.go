@@ -103,21 +103,48 @@ func (s *IVRFlowService) Publish(ctx context.Context, id int64, userID int64) (*
 	return f, nil
 }
 
+const lockTTL = 30 * time.Minute
+
 func (s *IVRFlowService) Lock(ctx context.Context, id int64, userID int64) (*IVRFlow, error) {
 	f, err := s.flows.GetByID(ctx, id)
 	if err != nil || f == nil {
 		return nil, ErrFlowNotFound
 	}
 
+	now := time.Now()
+
+	// Allow re-lock if the current lock has expired.
 	if f.LockedBy != nil && *f.LockedBy != userID {
-		return nil, ErrFlowLocked
+		if f.LockExpiresAt == nil || now.Before(*f.LockExpiresAt) {
+			return nil, ErrFlowLocked
+		}
 	}
 
-	now := time.Now()
+	expires := now.Add(lockTTL)
 	f.LockedBy = &userID
 	f.LockedAt = &now
+	f.LockExpiresAt = &expires
 	f.UpdatedAt = now
 
+	if err := s.flows.Update(ctx, f); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// RefreshLock extends the lock expiry for the current lock owner.
+func (s *IVRFlowService) RefreshLock(ctx context.Context, id int64, userID int64) (*IVRFlow, error) {
+	f, err := s.flows.GetByID(ctx, id)
+	if err != nil || f == nil {
+		return nil, ErrFlowNotFound
+	}
+	if f.LockedBy == nil || *f.LockedBy != userID {
+		return nil, ErrFlowNotOwner
+	}
+	now := time.Now()
+	expires := now.Add(lockTTL)
+	f.LockExpiresAt = &expires
+	f.UpdatedAt = now
 	if err := s.flows.Update(ctx, f); err != nil {
 		return nil, err
 	}
@@ -139,6 +166,7 @@ func (s *IVRFlowService) Unlock(ctx context.Context, id int64, userID int64) (*I
 
 	f.LockedBy = nil
 	f.LockedAt = nil
+	f.LockExpiresAt = nil
 	f.UpdatedAt = time.Now()
 
 	if err := s.flows.Update(ctx, f); err != nil {

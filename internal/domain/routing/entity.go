@@ -70,6 +70,7 @@ type IVRFlow struct {
 	Status      FlowStatus     `db:"status" json:"status"`
 	LockedBy    *int64         `db:"locked_by" json:"locked_by,omitempty"`
 	LockedAt    *time.Time     `db:"locked_at" json:"locked_at,omitempty"`
+	LockExpiresAt *time.Time  `db:"lock_expires_at" json:"lock_expires_at,omitempty"`
 	PublishedAt *time.Time     `db:"published_at" json:"published_at,omitempty"`
 	CreatedAt   time.Time      `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
