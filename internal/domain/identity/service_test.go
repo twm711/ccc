@@ -353,3 +353,34 @@ func TestAgentPresence_InvalidTransition(t *testing.T) {
 	_, err := svc.TransitionTo(ctx, 100, PresenceTalking)
 	assert.ErrorIs(t, err, ErrInvalidStateTransition)
 }
+
+// TestMockAgentPresenceRepo_GetByAgentIDs verifies the batch-fetch contract
+// used by acd.pickAgent (added in Round 12 to replace N sequential GetByAgentID
+// calls during dispatch). The mock must:
+//
+//   - return only presences whose AgentID was requested (no leakage),
+//   - skip unknown agent IDs (nil filter, no error),
+//   - preserve the rest of the data for subsequent reads.
+func TestMockAgentPresenceRepo_GetByAgentIDs(t *testing.T) {
+	repo := NewMockAgentPresenceRepo()
+	ctx := context.Background()
+	for _, id := range []int64{10, 20, 30} {
+		require.NoError(t, repo.Upsert(ctx, &AgentPresence{AgentID: id, Status: PresenceIdle}))
+	}
+
+	out, err := repo.GetByAgentIDs(ctx, []int64{10, 30, 999})
+	require.NoError(t, err)
+	assert.Len(t, out, 2, "expected only 2 known agents to come back, got %d", len(out))
+
+	got := map[int64]bool{}
+	for _, p := range out {
+		got[p.AgentID] = true
+	}
+	assert.True(t, got[10], "agent 10 missing from batch result")
+	assert.True(t, got[30], "agent 30 missing from batch result")
+	assert.False(t, got[20], "agent 20 leaked into batch result (not requested)")
+
+	out, err = repo.GetByAgentIDs(ctx, nil)
+	require.NoError(t, err)
+	assert.Empty(t, out, "nil id list must return empty (not all rows)")
+}

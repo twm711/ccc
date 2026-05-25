@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/divord97/ccc/pkg/snowflake"
 	"github.com/go-chi/chi/v5"
@@ -32,9 +33,10 @@ func (h *SmsConfigHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	now := time.Now()
 	cfg := &integration.SmsConfig{
-		ID: snowflake.NextID(), TenantID: 1,
+		ID: snowflake.NextID(), TenantID: tenantID,
 		Provider: in.Provider, AccessKeyID: in.AccessKeyID, SignName: in.SignName,
 		TemplateMap: in.TemplateMap, IsActive: in.IsActive, CreatedAt: now, UpdatedAt: now,
 	}
@@ -46,7 +48,8 @@ func (h *SmsConfigHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SmsConfigHandler) List(w http.ResponseWriter, r *http.Request) {
-	items, total, err := h.repo.List(r.Context(), 1, 0, 50)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	items, total, err := h.repo.List(r.Context(), tenantID, 0, 50)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -55,9 +58,10 @@ func (h *SmsConfigHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SmsConfigHandler) Update(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	cfg, err := h.repo.GetByID(r.Context(), id)
-	if err != nil || cfg == nil {
+	if err != nil || cfg == nil || cfg.TenantID != tenantID {
 		response.Error(w, http.StatusNotFound, "sms config not found")
 		return
 	}
@@ -86,7 +90,13 @@ func (h *SmsConfigHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SmsConfigHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	cfg, err := h.repo.GetByID(r.Context(), id)
+	if err != nil || cfg == nil || cfg.TenantID != tenantID {
+		response.Error(w, http.StatusNotFound, "sms config not found")
+		return
+	}
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return

@@ -797,7 +797,17 @@ func main() {
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	srv := &http.Server{Addr: addr, Handler: router}
+	// Server-level timeouts guard against Slowloris / resource exhaustion.
+	// WriteTimeout is the largest because CSV exports and recording streams
+	// legitimately produce long responses.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
 		logger.Info().Str("addr", addr).Msg("starting CCC server")

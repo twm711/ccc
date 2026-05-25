@@ -7,6 +7,7 @@ import (
 
 	"github.com/divord97/ccc/internal/domain/ai"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -62,11 +63,7 @@ func (h *KnowledgeHandler) CreateArticle(w http.ResponseWriter, r *http.Request)
 
 func (h *KnowledgeHandler) ListArticles(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 	items, err := h.svc.ListArticles(r.Context(), tenantID, offset, limit)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
@@ -125,10 +122,7 @@ func (h *KnowledgeHandler) UpdateArticle(w http.ResponseWriter, r *http.Request)
 func (h *KnowledgeHandler) Search(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
 	q := r.URL.Query().Get("q")
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, _ := pagination.ParseLimitOffset(r, 20, 200)
 	items, err := h.svc.Search(r.Context(), tenantID, q, limit)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())

@@ -8,6 +8,7 @@ import (
 	"github.com/divord97/ccc/internal/application/export"
 	"github.com/divord97/ccc/internal/domain/report"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 )
 
@@ -21,11 +22,7 @@ func NewReportHandler(svc *report.ReportService) *ReportHandler {
 
 func parseReportFilter(r *http.Request) report.ReportFilter {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 50
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 50, 200)
 
 	start, _ := time.Parse("2006-01-02", r.URL.Query().Get("start"))
 	end, _ := time.Parse("2006-01-02", r.URL.Query().Get("end"))

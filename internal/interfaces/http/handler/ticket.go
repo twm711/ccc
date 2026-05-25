@@ -8,6 +8,7 @@ import (
 	"github.com/divord97/ccc/internal/domain/ticket"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/bizlog"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
@@ -159,11 +160,7 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *TicketHandler) ListTickets(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 	items, err := h.svc.List(r.Context(), tenantID, offset, limit)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())

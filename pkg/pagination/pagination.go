@@ -44,3 +44,23 @@ func ParseCursor(r *http.Request) CursorParams {
 	}
 	return CursorParams{Cursor: cursor, PageSize: pageSize}
 }
+
+// ParseLimitOffset handles the legacy `?limit=&offset=` query style. Clamps
+// limit into [1, max] with the provided default when missing or out of range;
+// negative offsets become 0. Keeps the existing handler contract — the caller
+// stays in charge of passing the (limit, offset) tuple to the repo — but
+// enforces a single upper bound so callers cannot ask for `?limit=10000000`.
+func ParseLimitOffset(r *http.Request, dflt, max int) (limit, offset int) {
+	limit, _ = strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit <= 0 {
+		limit = dflt
+	}
+	if limit > max {
+		limit = max
+	}
+	offset, _ = strconv.Atoi(r.URL.Query().Get("offset"))
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}

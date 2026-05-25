@@ -27,7 +27,7 @@ export function useCalls() {
 }
 
 export function useDashboard() {
-  return useQuery({ queryKey: ['dashboard'], queryFn: () => dashboardApi.get().then(r => r.data), refetchInterval: 5000 });
+  return useQuery({ queryKey: ['dashboard'], queryFn: () => dashboardApi.overview().then((r: { data: unknown }) => r.data), refetchInterval: 5000 });
 }
 
 export function useDashboardOverview() {

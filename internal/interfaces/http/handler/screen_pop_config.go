@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/divord97/ccc/pkg/snowflake"
 	"github.com/go-chi/chi/v5"
@@ -31,9 +32,10 @@ func (h *ScreenPopConfigHandler) Create(w http.ResponseWriter, r *http.Request) 
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	now := time.Now()
 	cfg := &integration.ScreenPopConfig{
-		ID: snowflake.NextID(), TenantID: 1,
+		ID: snowflake.NextID(), TenantID: tenantID,
 		Name: in.Name, URLTemplate: in.URLTemplate, Position: in.Position,
 		IsActive: in.IsActive, CreatedAt: now, UpdatedAt: now,
 	}
@@ -45,7 +47,8 @@ func (h *ScreenPopConfigHandler) Create(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *ScreenPopConfigHandler) List(w http.ResponseWriter, r *http.Request) {
-	items, total, err := h.repo.List(r.Context(), 1, 0, 50)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	items, total, err := h.repo.List(r.Context(), tenantID, 0, 50)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -54,9 +57,10 @@ func (h *ScreenPopConfigHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ScreenPopConfigHandler) Update(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	cfg, err := h.repo.GetByID(r.Context(), id)
-	if err != nil || cfg == nil {
+	if err != nil || cfg == nil || cfg.TenantID != tenantID {
 		response.Error(w, http.StatusNotFound, "screen pop config not found")
 		return
 	}
@@ -83,7 +87,13 @@ func (h *ScreenPopConfigHandler) Update(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *ScreenPopConfigHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	cfg, err := h.repo.GetByID(r.Context(), id)
+	if err != nil || cfg == nil || cfg.TenantID != tenantID {
+		response.Error(w, http.StatusNotFound, "screen pop config not found")
+		return
+	}
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return

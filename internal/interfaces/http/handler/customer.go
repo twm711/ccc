@@ -7,6 +7,7 @@ import (
 
 	"github.com/divord97/ccc/internal/domain/crm"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -52,11 +53,7 @@ func (h *CustomerHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *CustomerHandler) List(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 
 	items, err := h.svc.List(r.Context(), tenantID, offset, limit)
 	if err != nil {
@@ -157,11 +154,7 @@ func (h *CustomerHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 func (h *CustomerHandler) ListInteractions(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 
 	items, err := h.svc.ListInteractions(r.Context(), id, offset, limit)
 	if err != nil {

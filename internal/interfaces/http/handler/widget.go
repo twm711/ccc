@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/domain/im"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -55,11 +56,7 @@ func (h *WidgetHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *WidgetHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 50
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 50, 200)
 	items, err := h.svc.ListMessages(r.Context(), id, offset, limit)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
