@@ -217,6 +217,29 @@ func (s *Service) PurgeDLQ(ctx context.Context, tenantID int64, before time.Time
 	return s.logs.PurgeBefore(ctx, tenantID, before)
 }
 
+// ValidateSubscription checks that each event type in a comma-separated list
+// is a known event from the catalog. Returns the first invalid event type, or
+// "" if all are valid. The wildcard "*" is always accepted.
+func ValidateSubscription(events string) (invalid string) {
+	if events == "*" || events == "" {
+		return ""
+	}
+	known := make(map[string]bool, len(EventCatalog()))
+	for _, d := range EventCatalog() {
+		known[d.Type] = true
+	}
+	for _, e := range strings.Split(events, ",") {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if !known[e] {
+			return e
+		}
+	}
+	return ""
+}
+
 // EventDescriptor describes a webhook event type for the OpenAPI event catalog.
 type EventDescriptor struct {
 	Type        string `json:"type"`

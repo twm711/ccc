@@ -26,6 +26,20 @@ func (e *Engine) SetNLUProvider(p NLUProvider) {
 	}
 }
 
+// SetQueueInspector wires the queue depth provider for QueuePosition nodes.
+func (e *Engine) SetQueueInspector(q QueueInspector) {
+	if h, ok := e.handlers[routing.NodeQueuePosition].(*QueuePositionHandler); ok {
+		h.Queue = q
+	}
+}
+
+// SetSentimentAnalyzer wires the sentiment analysis provider for SentimentGate nodes.
+func (e *Engine) SetSentimentAnalyzer(a SentimentAnalyzer) {
+	if h, ok := e.handlers[routing.NodeSentimentGate].(*SentimentGateHandler); ok {
+		h.Analyzer = a
+	}
+}
+
 // SetIVRContextSink rewires the TransferToAgent handler to persist session
 // variables (so the agent screen pop can show the caller's IVR breadcrumbs).
 // Safe to call after DefaultEngine has registered the handler.
@@ -193,6 +207,8 @@ func DefaultEngine(eslClient *esl.Client, flowLoader FlowLoader, acd ...ACDEnque
 	e.RegisterHandler(routing.NodeDigitalEmployee, &DigitalEmployeeHandler{})
 	e.RegisterHandler(routing.NodeCallback, &CallbackHandler{})
 	e.RegisterHandler(routing.NodeNLU, &NLUHandler{})
+	e.RegisterHandler(routing.NodeQueuePosition, &QueuePositionHandler{})
+	e.RegisterHandler(routing.NodeSentimentGate, &SentimentGateHandler{})
 	return e
 }
 

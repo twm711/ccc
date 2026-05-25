@@ -58,6 +58,52 @@ func (s *DashboardService) GetAgentStatusList(ctx context.Context, tenantID int6
 	return s.dashboard.GetAgentStatusList(ctx, tenantID)
 }
 
+// WallboardData provides a flattened, big-screen-friendly view of KPIs
+// designed for lobby display / wallboard mode (large font, key metrics only).
+type WallboardData struct {
+	TenantID       int64   `json:"tenant_id"`
+	CallsToday     int     `json:"calls_today"`
+	ActiveCalls    int     `json:"active_calls"`
+	QueuedCalls    int     `json:"queued_calls"`
+	AbandonedCalls int     `json:"abandoned_calls"`
+	ServiceLevel   float64 `json:"service_level"` // SL20s %
+	AvgWaitSec     float64 `json:"avg_wait_sec"`
+	LongestWaitSec int     `json:"longest_wait_sec"`
+	AbandonRate    float64 `json:"abandon_rate"` // %
+	AgentsOnline   int     `json:"agents_online"`
+	AgentsIdle     int     `json:"agents_idle"`
+	AgentsBusy     int     `json:"agents_busy"` // talking + dialing
+}
+
+// GetWallboard returns a wallboard-optimized snapshot from the dashboard overview.
+func (s *DashboardService) GetWallboard(ctx context.Context, tenantID int64) (*WallboardData, error) {
+	o, err := s.dashboard.GetOverview(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	if o == nil {
+		return &WallboardData{TenantID: tenantID}, nil
+	}
+	var abandonRate float64
+	if o.InboundCalls > 0 {
+		abandonRate = float64(o.AbandonedCalls) / float64(o.InboundCalls) * 100
+	}
+	return &WallboardData{
+		TenantID:       tenantID,
+		CallsToday:     o.TotalCallsToday,
+		ActiveCalls:    o.ActiveCalls,
+		QueuedCalls:    o.QueuedCalls,
+		AbandonedCalls: o.AbandonedCalls,
+		ServiceLevel:   o.ServiceLevel20s,
+		AvgWaitSec:     o.AvgWaitSec,
+		LongestWaitSec: o.LongestWaitSec,
+		AbandonRate:    abandonRate,
+		AgentsOnline:   o.AgentsOnline,
+		AgentsIdle:     o.AgentsIdle,
+		AgentsBusy:     o.AgentsTalking + o.AgentsDialing,
+	}, nil
+}
+
 // ReportService provides report queries.
 type ReportService struct {
 	agents       AgentReportRepository

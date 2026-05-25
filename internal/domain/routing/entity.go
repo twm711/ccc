@@ -48,6 +48,8 @@ const (
 	NodeDigitalEmployee    NodeType = "digital_employee"
 	NodeCallback           NodeType = "callback"
 	NodeNLU                NodeType = "nlu"
+	NodeQueuePosition      NodeType = "queue_position"
+	NodeSentimentGate      NodeType = "sentiment_gate"
 	NodeEnd                NodeType = "end"
 )
 
@@ -57,7 +59,7 @@ var AllNodeTypes = []NodeType{
 	NodeSetVariable, NodeVoicemail, NodeHangupReason,
 	NodeFunction, NodeHTTPRequest, NodeJSONParser, NodeSMS,
 	NodeSatisfactionRating, NodeASR, NodeSubFlow, NodeDigitalEmployee,
-	NodeCallback, NodeNLU, NodeEnd,
+	NodeCallback, NodeNLU, NodeQueuePosition, NodeSentimentGate, NodeEnd,
 }
 
 type IVRFlow struct {
