@@ -76,6 +76,11 @@ type CallLookup interface {
 	GetByID(ctx context.Context, id int64) (*call.Call, error)
 }
 
+// AgentLookup resolves an agent record to read per-media capacity settings.
+type AgentLookup interface {
+	GetByID(ctx context.Context, id int64) (*identity.Agent, error)
+}
+
 // Service is the ACD dispatcher.
 type Service struct {
 	rdb        *redis.Client
@@ -84,6 +89,7 @@ type Service struct {
 	members    MembersRepo
 	skillGroup SkillGroups
 	calls      CallLookup
+	agentLookup AgentLookup
 	logger     zerolog.Logger
 	pollPeriod time.Duration
 	rngMu      sync.Mutex
@@ -101,6 +107,9 @@ type Config struct {
 	Logger     zerolog.Logger
 	PollPeriod time.Duration
 }
+
+// SetAgentLookup wires agent lookup for media capacity routing.
+func (s *Service) SetAgentLookup(al AgentLookup) { s.agentLookup = al }
 
 // NewService wires the ACD dispatcher. The returned service is inert until Run is called.
 func NewService(cfg Config) *Service {
@@ -386,6 +395,50 @@ func (s *Service) RememberAgent(ctx context.Context, tenantID int64, caller stri
 
 func familiarKey(tenantID int64, caller string) string {
 	return fmt.Sprintf("%s%d:%s", lastAgentPrefix, tenantID, caller)
+}
+
+// GetMediaCapacity returns an agent's capacity across all media types.
+// activeVoice/activeChat/activeEmail are read from Redis counters if available.
+func (s *Service) GetMediaCapacity(ctx context.Context, agentID int64) ([]identity.MediaCapacity, error) {
+	if s.agentLookup == nil {
+		return nil, errors.New("acd: agent lookup not configured")
+	}
+	agent, err := s.agentLookup.GetByID(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	voiceMax := agent.MaxConcurrent
+	if voiceMax == 0 {
+		voiceMax = 1
+	}
+	chatMax := agent.MaxChatSlots
+	if chatMax == 0 {
+		chatMax = 5
+	}
+	emailMax := agent.MaxEmailSlots
+	if emailMax == 0 {
+		emailMax = 10
+	}
+
+	activeVoice := s.readActiveCount(ctx, agentID, "voice")
+	activeChat := s.readActiveCount(ctx, agentID, "chat")
+	activeEmail := s.readActiveCount(ctx, agentID, "email")
+
+	return []identity.MediaCapacity{
+		{Media: identity.MediaTypeVoice, MaxSlots: voiceMax, ActiveSlots: activeVoice},
+		{Media: identity.MediaTypeChat, MaxSlots: chatMax, ActiveSlots: activeChat},
+		{Media: identity.MediaTypeEmail, MaxSlots: emailMax, ActiveSlots: activeEmail},
+	}, nil
+}
+
+func (s *Service) readActiveCount(ctx context.Context, agentID int64, media string) int {
+	key := fmt.Sprintf("acd:active:%d:%s", agentID, media)
+	val, err := s.rdb.Get(ctx, key).Int()
+	if err != nil {
+		return 0
+	}
+	return val
 }
 
 func (s *Service) tryClaim(ctx context.Context, agentID int64) bool {

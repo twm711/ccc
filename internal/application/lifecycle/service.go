@@ -59,6 +59,17 @@ type RecordingEncryptor interface {
 	Encrypt(keyID string, plaintext []byte) ([]byte, error)
 }
 
+// TicketCreator creates a ticket from an automated trigger.
+type TicketCreator interface {
+	CreateAutoTicket(ctx context.Context, tenantID int64, title, description, priority string, callID *int64) error
+}
+
+// RepeatCallDetector tracks per-caller inbound frequency and returns the
+// daily count after incrementing.
+type RepeatCallDetector interface {
+	IncrAndGet(ctx context.Context, tenantID int64, caller string) (count int, err error)
+}
+
 // Service orchestrates cross-domain side effects for call lifecycle events.
 type Service struct {
 	callSvc           *call.CallService
@@ -82,6 +93,9 @@ type Service struct {
 	qaTrigger         QAAutoTrigger
 	recEncryptor      RecordingEncryptor
 	recEncryptKeyID   string
+	ticketCreator     TicketCreator
+	repeatDetector    RepeatCallDetector
+	repeatThreshold   int
 	logger            zerolog.Logger
 }
 
@@ -142,6 +156,16 @@ func (s *Service) SetFamiliarRecorder(rec FamiliarAgentRecorder, ttlDays func(te
 // requires a recording compliance announcement before call recording starts.
 func (s *Service) SetRecordingAnnounceLookup(fn func(ctx context.Context, tenantID int64) bool) {
 	s.recordingAnnounce = fn
+}
+
+// SetTicketCreator wires automatic ticket creation for repeat-call detection.
+func (s *Service) SetTicketCreator(tc TicketCreator) { s.ticketCreator = tc }
+
+// SetRepeatCallDetector wires a detector that counts same-caller daily calls.
+// When count >= threshold, an escalation ticket is auto-created.
+func (s *Service) SetRepeatCallDetector(d RepeatCallDetector, threshold int) {
+	s.repeatDetector = d
+	s.repeatThreshold = threshold
 }
 
 // SetQAAutoTrigger wires QA auto-inspection for completed calls.
@@ -513,6 +537,16 @@ func (s *Service) postCallHooksAsync(c *call.Call) {
 	// QA auto-inspection
 	if s.qaTrigger != nil && c.AnsweredAt != nil {
 		s.qaTrigger.AutoInspect(ctx, c.TenantID, c.ID)
+	}
+
+	// Repeat-call ticket escalation
+	if s.repeatDetector != nil && s.ticketCreator != nil && c.Direction == call.DirectionInbound && c.Caller != "" {
+		count, err := s.repeatDetector.IncrAndGet(ctx, c.TenantID, c.Caller)
+		if err == nil && s.repeatThreshold > 0 && count >= s.repeatThreshold {
+			title := fmt.Sprintf("Repeat caller: %s (%d calls today)", c.Caller, count)
+			desc := fmt.Sprintf("Caller %s has called %d times today. Last call ID: %d. Possible unresolved issue.", c.Caller, count, c.ID)
+			_ = s.ticketCreator.CreateAutoTicket(ctx, c.TenantID, title, desc, "high", &c.ID)
+		}
 	}
 }
 

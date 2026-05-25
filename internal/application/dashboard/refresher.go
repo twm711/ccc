@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -15,13 +16,28 @@ import (
 // Tuned for hundreds of tenants per 10s tick without overwhelming MySQL/Redis.
 const refreshConcurrency = 8
 
+// AlarmLevel indicates the severity of an SLA alarm.
+type AlarmLevel string
+
+const (
+	AlarmWarning   AlarmLevel = "warning"
+	AlarmCritical  AlarmLevel = "critical"
+	AlarmEmergency AlarmLevel = "emergency"
+)
+
+// AlarmNotifier receives SLA alarm notifications.
+type AlarmNotifier interface {
+	NotifyAlarm(ctx context.Context, tenantID int64, level AlarmLevel, metric string, value float64, threshold float64)
+}
+
 // Refresher periodically aggregates call and agent data into Redis dashboard snapshots.
 type Refresher struct {
-	callRepo    call.CallRepository
+	callRepo     call.CallRepository
 	presenceRepo identity.AgentPresenceRepository
-	tenantRepo  identity.TenantRepository
-	dashRepo    report.DashboardRepository
-	logger      zerolog.Logger
+	tenantRepo   identity.TenantRepository
+	dashRepo     report.DashboardRepository
+	alarmNotif   AlarmNotifier
+	logger       zerolog.Logger
 }
 
 func NewRefresher(
@@ -39,6 +55,9 @@ func NewRefresher(
 		logger:       logger,
 	}
 }
+
+// SetAlarmNotifier wires an alarm notifier for SLA threshold monitoring.
+func (r *Refresher) SetAlarmNotifier(n AlarmNotifier) { r.alarmNotif = n }
 
 // Start runs the refresh loop every 10 seconds until ctx is cancelled.
 func (r *Refresher) Start(ctx context.Context) {
@@ -134,5 +153,62 @@ func (r *Refresher) refreshTenant(ctx context.Context, tenantID int64) error {
 		GeneratedAt:     time.Now(),
 	}
 
-	return r.dashRepo.UpdateOverview(ctx, overview)
+	if err := r.dashRepo.UpdateOverview(ctx, overview); err != nil {
+		return err
+	}
+
+	r.evaluateAlarms(ctx, overview)
+	return nil
+}
+
+// evaluateAlarms checks SLA thresholds and fires alarm notifications.
+func (r *Refresher) evaluateAlarms(ctx context.Context, o *report.DashboardOverview) {
+	if r.alarmNotif == nil {
+		return
+	}
+
+	// Service Level alarms: <40% emergency, <60% critical, <80% warning.
+	if o.ServiceLevel20s > 0 || o.InboundCalls > 0 {
+		switch {
+		case o.ServiceLevel20s < 40:
+			r.alarmNotif.NotifyAlarm(ctx, o.TenantID, AlarmEmergency, "service_level_20s", o.ServiceLevel20s, 40)
+		case o.ServiceLevel20s < 60:
+			r.alarmNotif.NotifyAlarm(ctx, o.TenantID, AlarmCritical, "service_level_20s", o.ServiceLevel20s, 60)
+		case o.ServiceLevel20s < 80:
+			r.alarmNotif.NotifyAlarm(ctx, o.TenantID, AlarmWarning, "service_level_20s", o.ServiceLevel20s, 80)
+		}
+	}
+
+	// Average wait time alarms: >60s critical, >30s warning.
+	switch {
+	case o.AvgWaitSec > 60:
+		r.alarmNotif.NotifyAlarm(ctx, o.TenantID, AlarmCritical, "avg_wait_sec", o.AvgWaitSec, 60)
+	case o.AvgWaitSec > 30:
+		r.alarmNotif.NotifyAlarm(ctx, o.TenantID, AlarmWarning, "avg_wait_sec", o.AvgWaitSec, 30)
+	}
+
+	// Longest wait alarms: >120s critical.
+	if o.LongestWaitSec > 120 {
+		r.alarmNotif.NotifyAlarm(ctx, o.TenantID, AlarmCritical, "longest_wait_sec", float64(o.LongestWaitSec), 120)
+	}
+}
+
+// logAlarmNotifier is a default implementation that logs alarms.
+type logAlarmNotifier struct {
+	logger zerolog.Logger
+}
+
+// NewLogAlarmNotifier returns an AlarmNotifier that writes to the logger.
+func NewLogAlarmNotifier(logger zerolog.Logger) AlarmNotifier {
+	return &logAlarmNotifier{logger: logger}
+}
+
+func (n *logAlarmNotifier) NotifyAlarm(_ context.Context, tenantID int64, level AlarmLevel, metric string, value float64, threshold float64) {
+	n.logger.Warn().
+		Int64("tenant_id", tenantID).
+		Str("level", string(level)).
+		Str("metric", metric).
+		Str("value", fmt.Sprintf("%.2f", value)).
+		Str("threshold", fmt.Sprintf("%.0f", threshold)).
+		Msg("SLA alarm triggered")
 }

@@ -53,6 +53,7 @@ import (
 	httpRouter "github.com/divord97/ccc/internal/interfaces/http"
 	"github.com/divord97/ccc/internal/interfaces/http/handler"
 	"github.com/divord97/ccc/pkg/snowflake"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
 
@@ -302,6 +303,26 @@ func main() {
 		})
 	})
 
+	// Bridge Agent Presence → Webhook: fire agent.status_changed event.
+	agentPresenceSvc.OnPresenceChange(func(ctx context.Context, p *identity.AgentPresence, oldStatus identity.AgentPresenceStatus) {
+		webhookSvc.Deliver(ctx, webhook.Event{
+			TenantID:  p.TenantID,
+			Type:      "agent.status_changed",
+			Payload:   map[string]interface{}{"agent_id": p.AgentID, "old_status": oldStatus, "new_status": p.Status},
+			Timestamp: time.Now(),
+		})
+	})
+
+	// Auto-ticket: CSAT low score → complaint ticket.
+	tcAdapter := ticketCreatorAdapter{tickets: ticketSvc}
+	csatSvc.SetTicketCreator(tcAdapter, 2)
+	// Auto-ticket: repeat caller → escalation ticket.
+	lifecycleSvc.SetTicketCreator(tcAdapter)
+	lifecycleSvc.SetRepeatCallDetector(repeatCallDetectorAdapter{rdb: redisClient}, 3)
+
+	// Dialer: per-phone daily frequency limit (max 3 calls/day/number, MIIT compliance).
+	dialerSvc.SetFrequencyChecker(dialer.NewRedisFrequencyChecker(redisClient), 3)
+
 	trunkMonitor := trunk.NewHealthMonitor(sipTrunkRepo, trunkHealthSvc, logger, eslClient)
 	emailSvc := email.NewService(imSvc, logger)
 	emailSvc.SetRouter(imRouterSvc)
@@ -327,6 +348,7 @@ func main() {
 		Calls:      callRepo,
 		Logger:     logger,
 	})
+	acdSvc.SetAgentLookup(agentRepo)
 	// Familiar-customer affinity: lifecycle.EndCall records who served each
 	// inbound caller; ACD reads this cache on dispatch for routing_policy=familiar.
 	lifecycleSvc.SetFamiliarRecorder(acdSvc, func(tenantID int64) int {
@@ -753,6 +775,7 @@ func main() {
 
 	// Start dashboard refresher (aggregates DB data into Redis every 10s)
 	dashRefresher := dashboard.NewRefresher(callRepo, agentPresenceRepo, tenantRepo, dashboardRepo, logger)
+	dashRefresher.SetAlarmNotifier(dashboard.NewLogAlarmNotifier(logger))
 
 	// Start WebSocket hub goroutines
 	hubCtx, hubCancel := context.WithCancel(context.Background())
@@ -894,6 +917,35 @@ func (a csatCallerAdapter) GetByID(ctx context.Context, id int64) (string, error
 		return "", err
 	}
 	return c.Caller, nil
+}
+
+// ticketCreatorAdapter bridges ticket.TicketService → csat.TicketCreator / lifecycle.TicketCreator.
+type ticketCreatorAdapter struct{ tickets *ticket.TicketService }
+
+func (a ticketCreatorAdapter) CreateAutoTicket(ctx context.Context, tenantID int64, title, description, priority string, callID *int64) error {
+	_, err := a.tickets.Create(ctx, ticket.CreateTicketInput{
+		TenantID:    tenantID,
+		Title:       title,
+		Description: description,
+		Priority:    priority,
+		CallID:      callID,
+	})
+	return err
+}
+
+// repeatCallDetectorAdapter uses Redis INCR to count daily calls per caller.
+type repeatCallDetectorAdapter struct{ rdb *redis.Client }
+
+func (a repeatCallDetectorAdapter) IncrAndGet(ctx context.Context, tenantID int64, caller string) (int, error) {
+	key := fmt.Sprintf("repeat_call:%d:%s:%s", tenantID, caller, time.Now().Format("20060102"))
+	count, err := a.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if count == 1 {
+		a.rdb.Expire(ctx, key, 25*time.Hour)
+	}
+	return int(count), nil
 }
 
 // retry every 5 minutes with the previous (still valid) token until success.

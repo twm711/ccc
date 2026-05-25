@@ -377,13 +377,22 @@ func (s *SkillGroupService) GetMembers(ctx context.Context, skillGroupID int64) 
 
 // --- AgentPresenceService ---
 
+// PresenceChangeHook is called after an agent's presence status changes.
+type PresenceChangeHook func(ctx context.Context, p *AgentPresence, oldStatus AgentPresenceStatus)
+
 type AgentPresenceService struct {
 	presence    AgentPresenceRepository
 	logs        AgentPresenceLogRepository
 	shifts      AgentShiftLogRepository
 	acwTimers   map[int64]func()
 	acwResolver func(ctx context.Context, tenantID, agentID int64) int
+	changeHooks []PresenceChangeHook
 	mu          sync.Mutex
+}
+
+// OnPresenceChange registers a hook that fires after every status transition.
+func (s *AgentPresenceService) OnPresenceChange(h PresenceChangeHook) {
+	s.changeHooks = append(s.changeHooks, h)
 }
 
 func NewAgentPresenceService(pr AgentPresenceRepository, lr AgentPresenceLogRepository) *AgentPresenceService {
@@ -483,6 +492,7 @@ func (s *AgentPresenceService) TransitionTo(ctx context.Context, agentID int64, 
 	}
 	s.logTransition(ctx, p)
 	s.cancelACWTimer(agentID)
+	oldStatus := p.Status
 	p.Status = newStatus
 	if newStatus != PresenceTalking {
 		p.SubState = SubStateNone
@@ -496,6 +506,10 @@ func (s *AgentPresenceService) TransitionTo(ctx context.Context, agentID int64, 
 	p.LastStatusAt = p.UpdatedAt
 	if err := s.presence.Upsert(ctx, p); err != nil {
 		return nil, err
+	}
+	for _, h := range s.changeHooks {
+		h := h
+		go h(context.Background(), p, oldStatus)
 	}
 	return p, nil
 }

@@ -10,11 +10,17 @@ import (
 	"github.com/divord97/ccc/internal/domain/campaign"
 	"github.com/divord97/ccc/internal/infrastructure/esl"
 	"github.com/divord97/ccc/pkg/metrics"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
 
 // DialFunc is the function signature for placing an outbound campaign call.
 type DialFunc func(ctx context.Context, tenantID int64, callee string, campaignID, caseID int64) error
+
+// FrequencyChecker tracks per-phone daily call frequency.
+type FrequencyChecker interface {
+	IncrAndCheck(ctx context.Context, phone string, limit int) (allowed bool, count int, err error)
+}
 
 // Service orchestrates outbound dialing for campaigns across 4 modes.
 type Service struct {
@@ -22,6 +28,8 @@ type Service struct {
 	esl         *esl.Client
 	logger      zerolog.Logger
 	dialFn      DialFunc
+	freqChecker FrequencyChecker
+	maxDailyPerPhone int
 
 	mu       sync.Mutex
 	active   map[int64]*dialerState // campaignID → state
@@ -52,6 +60,13 @@ func NewService(campaignSvc *campaign.CampaignService, eslClient *esl.Client, lo
 // SetDialFunc allows injecting a custom dial function (e.g. outbound.Service.Dial).
 func (s *Service) SetDialFunc(fn DialFunc) {
 	s.dialFn = fn
+}
+
+// SetFrequencyChecker wires a per-phone daily call frequency limiter.
+// limit=0 disables the check.
+func (s *Service) SetFrequencyChecker(fc FrequencyChecker, maxDailyPerPhone int) {
+	s.freqChecker = fc
+	s.maxDailyPerPhone = maxDailyPerPhone
 }
 
 func (s *Service) eslDial(ctx context.Context, tenantID int64, callee string, campaignID, caseID int64) error {
@@ -294,6 +309,18 @@ func (s *Service) dialPower(ctx context.Context, c *campaign.Campaign, state *di
 
 // dialCase places an actual call for a campaign case and records the result.
 func (s *Service) dialCase(ctx context.Context, c *campaign.Campaign, cs *campaign.CampaignCase, state *dialerState) {
+	// Per-phone daily frequency check.
+	if s.freqChecker != nil && s.maxDailyPerPhone > 0 {
+		allowed, count, err := s.freqChecker.IncrAndCheck(ctx, cs.PhoneNumber, s.maxDailyPerPhone)
+		if err != nil {
+			s.logger.Warn().Err(err).Str("phone", cs.PhoneNumber).Msg("dialer: frequency check error, allowing call")
+		} else if !allowed {
+			s.logger.Info().Str("phone", cs.PhoneNumber).Int("count", count).Int("limit", s.maxDailyPerPhone).Msg("dialer: daily frequency limit reached, skipping")
+			s.RecordCallResult(ctx, c.ID, cs.ID, false, 0, "frequency_limit")
+			return
+		}
+	}
+
 	modeLabel := string(c.DialingMode)
 	if modeLabel == "" && state != nil {
 		modeLabel = string(state.mode)
@@ -394,4 +421,29 @@ func (s *Service) isWithinSchedule(c *campaign.Campaign) bool {
 		return false
 	}
 	return true
+}
+
+// RedisFrequencyChecker implements FrequencyChecker using Redis INCR with daily TTL.
+type RedisFrequencyChecker struct {
+	rdb *redis.Client
+}
+
+// NewRedisFrequencyChecker creates a frequency checker backed by Redis.
+func NewRedisFrequencyChecker(rdb *redis.Client) *RedisFrequencyChecker {
+	return &RedisFrequencyChecker{rdb: rdb}
+}
+
+func (c *RedisFrequencyChecker) IncrAndCheck(ctx context.Context, phone string, limit int) (bool, int, error) {
+	key := fmt.Sprintf("dial_freq:%s:%s", phone, time.Now().Format("20060102"))
+	count, err := c.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return true, 0, err
+	}
+	if count == 1 {
+		c.rdb.Expire(ctx, key, 25*time.Hour)
+	}
+	if int(count) > limit {
+		return false, int(count), nil
+	}
+	return true, int(count), nil
 }

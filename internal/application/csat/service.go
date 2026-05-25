@@ -22,13 +22,20 @@ type CallerLookup interface {
 	GetByID(ctx context.Context, id int64) (caller string, err error)
 }
 
+// TicketCreator creates a ticket from a CSAT-triggered event.
+type TicketCreator interface {
+	CreateAutoTicket(ctx context.Context, tenantID int64, title, description, priority string, callID *int64) error
+}
+
 // Service manages CSAT survey triggering and result collection.
 type Service struct {
-	configs    integration.CSATConfigRepository
-	results    integration.CSATResultRepository
-	smsSender  SMSSender
-	callerLook CallerLookup
-	logger     zerolog.Logger
+	configs       integration.CSATConfigRepository
+	results       integration.CSATResultRepository
+	smsSender     SMSSender
+	callerLook    CallerLookup
+	ticketCreator TicketCreator
+	lowScoreThreshold int
+	logger        zerolog.Logger
 }
 
 func NewService(configs integration.CSATConfigRepository, results integration.CSATResultRepository, logger zerolog.Logger) *Service {
@@ -40,6 +47,13 @@ func (s *Service) SetSMSSender(sender SMSSender) { s.smsSender = sender }
 
 // SetCallerLookup wires a function to resolve the customer phone from a call ID.
 func (s *Service) SetCallerLookup(l CallerLookup) { s.callerLook = l }
+
+// SetTicketCreator wires automatic ticket creation for low CSAT scores.
+// threshold defines the score at or below which a ticket is created (e.g. 2).
+func (s *Service) SetTicketCreator(tc TicketCreator, threshold int) {
+	s.ticketCreator = tc
+	s.lowScoreThreshold = threshold
+}
 
 // TriggerSurvey initiates a CSAT survey for a completed call.
 func (s *Service) TriggerSurvey(ctx context.Context, tenantID, callID int64, agentID *int64) error {
@@ -78,7 +92,20 @@ func (s *Service) RecordResult(ctx context.Context, tenantID, callID, configID i
 		Channel:   channel,
 		CreatedAt: time.Now(),
 	}
-	return s.results.Create(ctx, result)
+	if err := s.results.Create(ctx, result); err != nil {
+		return err
+	}
+
+	// Auto-create complaint ticket on low score.
+	if s.ticketCreator != nil && s.lowScoreThreshold > 0 && rating <= s.lowScoreThreshold {
+		title := fmt.Sprintf("Low CSAT (score=%d) for call %d", rating, callID)
+		desc := fmt.Sprintf("Customer rated %d/%d. Comment: %s", rating, 5, comment)
+		if err := s.ticketCreator.CreateAutoTicket(ctx, tenantID, title, desc, "high", &callID); err != nil {
+			s.logger.Warn().Err(err).Int64("call_id", callID).Int("rating", rating).Msg("csat: auto-ticket creation failed")
+		}
+	}
+
+	return nil
 }
 
 // sendSMSSurvey resolves the customer phone from the call and sends the CSAT

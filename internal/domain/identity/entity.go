@@ -82,12 +82,32 @@ type Agent struct {
 	SIPDeviceStatus          string    `db:"sip_device_status" json:"sip_device_status"`
 	MaxConcurrent            int       `db:"max_concurrent" json:"max_concurrent"`
 	MaxChatSlots             int       `db:"max_chat_slots" json:"max_chat_slots"`
+	MaxEmailSlots            int       `db:"max_email_slots" json:"max_email_slots"`
 	ACWSeconds               int       `db:"acw_seconds" json:"acw_seconds"`
 	OutboundOnly             bool      `db:"outbound_only" json:"outbound_only"`
 	PersonalOutboundNumberID *int64    `db:"personal_outbound_number_id" json:"personal_outbound_number_id,omitempty"`
 	CreatedAt                time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt                time.Time `db:"updated_at" json:"updated_at"`
 }
+
+// MediaType represents a communication channel type.
+type MediaType string
+
+const (
+	MediaTypeVoice MediaType = "voice"
+	MediaTypeChat  MediaType = "chat"
+	MediaTypeEmail MediaType = "email"
+)
+
+// MediaCapacity describes an agent's per-channel capacity and current load.
+type MediaCapacity struct {
+	Media       MediaType `json:"media"`
+	MaxSlots    int       `json:"max_slots"`
+	ActiveSlots int       `json:"active_slots"`
+}
+
+// HasCapacity returns true if the agent can accept more work on this media.
+func (mc MediaCapacity) HasCapacity() bool { return mc.ActiveSlots < mc.MaxSlots }
 
 type RoutingPolicy string
 
