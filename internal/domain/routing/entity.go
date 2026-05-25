@@ -47,6 +47,7 @@ const (
 	NodeSubFlow            NodeType = "sub_flow"
 	NodeDigitalEmployee    NodeType = "digital_employee"
 	NodeCallback           NodeType = "callback"
+	NodeNLU                NodeType = "nlu"
 	NodeEnd                NodeType = "end"
 )
 
@@ -56,7 +57,7 @@ var AllNodeTypes = []NodeType{
 	NodeSetVariable, NodeVoicemail, NodeHangupReason,
 	NodeFunction, NodeHTTPRequest, NodeJSONParser, NodeSMS,
 	NodeSatisfactionRating, NodeASR, NodeSubFlow, NodeDigitalEmployee,
-	NodeCallback, NodeEnd,
+	NodeCallback, NodeNLU, NodeEnd,
 }
 
 type IVRFlow struct {

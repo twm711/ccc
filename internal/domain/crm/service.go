@@ -9,10 +9,11 @@ import (
 )
 
 type CustomerService struct {
-	customers    CustomerRepository
-	phones       CustomerPhoneRepository
-	interactions CustomerInteractionRepository
-	fields       CustomFieldDefinitionRepository
+	customers      CustomerRepository
+	phones         CustomerPhoneRepository
+	interactions   CustomerInteractionRepository
+	fields         CustomFieldDefinitionRepository
+	erasureAuditor ErasureAuditor
 }
 
 func NewCustomerService(
@@ -232,6 +233,38 @@ func (s *CustomerService) BatchImport(ctx context.Context, records []CreateCusto
 	}
 	return result, nil
 }
+
+// ErasureAuditor records GDPR erasure events for compliance.
+type ErasureAuditor interface {
+	RecordErasure(ctx context.Context, tenantID, customerID, requestedBy int64) error
+}
+
+// EraseCustomer permanently deletes all customer data (GDPR Art. 17 Right to Erasure).
+func (s *CustomerService) EraseCustomer(ctx context.Context, tenantID, customerID, requestedBy int64) error {
+	c, err := s.customers.GetByID(ctx, customerID)
+	if err != nil || c == nil {
+		return ErrCustomerNotFound
+	}
+	if c.TenantID != tenantID {
+		return ErrCustomerNotFound
+	}
+	if err := s.interactions.DeleteByCustomer(ctx, customerID); err != nil {
+		return fmt.Errorf("gdpr: failed to delete interactions: %w", err)
+	}
+	if err := s.phones.DeleteByCustomer(ctx, customerID); err != nil {
+		return fmt.Errorf("gdpr: failed to delete phones: %w", err)
+	}
+	if err := s.customers.Delete(ctx, customerID); err != nil {
+		return fmt.Errorf("gdpr: failed to delete customer: %w", err)
+	}
+	if s.erasureAuditor != nil {
+		_ = s.erasureAuditor.RecordErasure(ctx, tenantID, customerID, requestedBy)
+	}
+	return nil
+}
+
+// SetErasureAuditor configures the GDPR erasure audit logger.
+func (s *CustomerService) SetErasureAuditor(a ErasureAuditor) { s.erasureAuditor = a }
 
 // CustomerJourney aggregates a customer's cross-channel interaction timeline.
 type CustomerJourney struct {

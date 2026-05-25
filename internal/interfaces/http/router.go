@@ -181,6 +181,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.Auth(deps.JWTSecret))
+		r.Use(middleware.TenantGuard())
 		r.Use(middleware.RateLimit(deps.RateLimiter, deps.TenantSettingsRepo, 100))
 		r.Use(middleware.AuditLog(deps.AuditLogRepo))
 		r.Use(middleware.PIIRedact())

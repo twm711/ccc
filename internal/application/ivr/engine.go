@@ -19,6 +19,13 @@ type Engine struct {
 // SetASRProvider sets the speech recognition provider for ASR nodes.
 func (e *Engine) SetASRProvider(p ASRProvider) { e.asrProvider = p }
 
+// SetNLUProvider sets the natural language understanding provider for NLU intent routing.
+func (e *Engine) SetNLUProvider(p NLUProvider) {
+	if h, ok := e.handlers[routing.NodeNLU].(*NLUHandler); ok {
+		h.NLU = p
+	}
+}
+
 // SetIVRContextSink rewires the TransferToAgent handler to persist session
 // variables (so the agent screen pop can show the caller's IVR breadcrumbs).
 // Safe to call after DefaultEngine has registered the handler.
@@ -185,6 +192,7 @@ func DefaultEngine(eslClient *esl.Client, flowLoader FlowLoader, acd ...ACDEnque
 	e.RegisterHandler(routing.NodeSubFlow, &SubFlowHandler{engine: e, flowLoader: flowLoader})
 	e.RegisterHandler(routing.NodeDigitalEmployee, &DigitalEmployeeHandler{})
 	e.RegisterHandler(routing.NodeCallback, &CallbackHandler{})
+	e.RegisterHandler(routing.NodeNLU, &NLUHandler{})
 	return e
 }
 
