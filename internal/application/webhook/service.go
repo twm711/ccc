@@ -214,3 +214,36 @@ func (s *Service) RetryDLQ(ctx context.Context, id int64) error {
 func (s *Service) PurgeDLQ(ctx context.Context, tenantID int64, before time.Time) (int64, error) {
 	return s.logs.PurgeBefore(ctx, tenantID, before)
 }
+
+// EventDescriptor describes a webhook event type for the OpenAPI event catalog.
+type EventDescriptor struct {
+	Type        string `json:"type"`
+	Category    string `json:"category"`
+	Description string `json:"description"`
+}
+
+// EventCatalog returns all supported webhook event types.
+func EventCatalog() []EventDescriptor {
+	return []EventDescriptor{
+		{Type: "call.created", Category: "call", Description: "A new call has been created"},
+		{Type: "call.answered", Category: "call", Description: "A call has been answered by an agent"},
+		{Type: "call.ended", Category: "call", Description: "A call has ended"},
+		{Type: "call.transferred", Category: "call", Description: "A call has been transferred"},
+		{Type: "call.queued", Category: "call", Description: "A call has entered the ACD queue"},
+		{Type: "agent.status_changed", Category: "agent", Description: "An agent's presence status has changed"},
+		{Type: "agent.checkin", Category: "agent", Description: "An agent has checked in"},
+		{Type: "agent.checkout", Category: "agent", Description: "An agent has checked out"},
+		{Type: "campaign.started", Category: "campaign", Description: "An outbound campaign has started"},
+		{Type: "campaign.completed", Category: "campaign", Description: "An outbound campaign has completed"},
+		{Type: "campaign.paused", Category: "campaign", Description: "An outbound campaign has been paused"},
+		{Type: "ticket.created", Category: "ticket", Description: "A new ticket has been created"},
+		{Type: "ticket.updated", Category: "ticket", Description: "A ticket has been updated"},
+		{Type: "ticket.resolved", Category: "ticket", Description: "A ticket has been resolved"},
+		{Type: "csat.submitted", Category: "csat", Description: "A CSAT survey response has been submitted"},
+		{Type: "im.session.created", Category: "im", Description: "An IM session has been created"},
+		{Type: "im.session.closed", Category: "im", Description: "An IM session has been closed"},
+		{Type: "recording.completed", Category: "recording", Description: "A call recording has completed processing"},
+		{Type: "qa.alert", Category: "qa", Description: "A real-time QA sensitive word alert was triggered"},
+		{Type: "sla.alarm", Category: "sla", Description: "An SLA threshold alarm was triggered"},
+	}
+}

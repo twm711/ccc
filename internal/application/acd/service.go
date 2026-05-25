@@ -432,6 +432,39 @@ func (s *Service) GetMediaCapacity(ctx context.Context, agentID int64) ([]identi
 	}, nil
 }
 
+// AgentWorkloadSummary aggregates an agent's current workload across all channels.
+type AgentWorkloadSummary struct {
+	AgentID    int64                    `json:"agent_id"`
+	Capacities []identity.MediaCapacity `json:"capacities"`
+	TotalActive int                    `json:"total_active"`
+	TotalMax    int                    `json:"total_max"`
+	Utilization float64                `json:"utilization"` // 0-100
+}
+
+// GetWorkloadSummary returns an agent's multi-channel workload snapshot.
+func (s *Service) GetWorkloadSummary(ctx context.Context, agentID int64) (*AgentWorkloadSummary, error) {
+	caps, err := s.GetMediaCapacity(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	var totalActive, totalMax int
+	for _, c := range caps {
+		totalActive += c.ActiveSlots
+		totalMax += c.MaxSlots
+	}
+	var util float64
+	if totalMax > 0 {
+		util = float64(totalActive) / float64(totalMax) * 100
+	}
+	return &AgentWorkloadSummary{
+		AgentID:     agentID,
+		Capacities:  caps,
+		TotalActive: totalActive,
+		TotalMax:    totalMax,
+		Utilization: util,
+	}, nil
+}
+
 func (s *Service) readActiveCount(ctx context.Context, agentID int64, media string) int {
 	key := fmt.Sprintf("acd:active:%d:%s", agentID, media)
 	val, err := s.rdb.Get(ctx, key).Int()

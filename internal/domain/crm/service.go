@@ -232,3 +232,44 @@ func (s *CustomerService) BatchImport(ctx context.Context, records []CreateCusto
 	}
 	return result, nil
 }
+
+// CustomerJourney aggregates a customer's cross-channel interaction timeline.
+type CustomerJourney struct {
+	Customer     *Customer              `json:"customer"`
+	Phones       []*CustomerPhone       `json:"phones"`
+	Interactions []*CustomerInteraction  `json:"interactions"`
+	ChannelStats map[string]int         `json:"channel_stats"`
+	FirstContact *time.Time             `json:"first_contact,omitempty"`
+	LastContact  *time.Time             `json:"last_contact,omitempty"`
+	TotalContacts int                   `json:"total_contacts"`
+}
+
+// GetJourney returns a full customer journey view with interaction timeline and channel stats.
+func (s *CustomerService) GetJourney(ctx context.Context, customerID int64) (*CustomerJourney, error) {
+	c, err := s.customers.GetByID(ctx, customerID)
+	if err != nil || c == nil {
+		return nil, ErrCustomerNotFound
+	}
+	phones, _ := s.phones.ListByCustomer(ctx, customerID)
+	interactions, _ := s.interactions.ListByCustomer(ctx, customerID, 0, 500)
+
+	journey := &CustomerJourney{
+		Customer:     c,
+		Phones:       phones,
+		Interactions: interactions,
+		ChannelStats: make(map[string]int),
+		TotalContacts: len(interactions),
+	}
+	for _, ix := range interactions {
+		journey.ChannelStats[ix.Channel]++
+		if journey.FirstContact == nil || ix.CreatedAt.Before(*journey.FirstContact) {
+			t := ix.CreatedAt
+			journey.FirstContact = &t
+		}
+		if journey.LastContact == nil || ix.CreatedAt.After(*journey.LastContact) {
+			t := ix.CreatedAt
+			journey.LastContact = &t
+		}
+	}
+	return journey, nil
+}

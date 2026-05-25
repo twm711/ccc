@@ -30,6 +30,10 @@ type TenantSettings struct {
 	DefaultACWSeconds       int    `db:"default_acw_seconds" json:"default_acw_seconds"`
 	APIRateLimitPerSec      int    `db:"api_rate_limit_per_sec" json:"api_rate_limit_per_sec"`
 	FamiliarAgentDays       int    `db:"familiar_agent_days" json:"familiar_agent_days"`
+	// Configurable thresholds (previously hardcoded).
+	MaxDailyDialPerPhone int `db:"max_daily_dial_per_phone" json:"max_daily_dial_per_phone"` // 0 = use default (3)
+	CSATLowScoreThreshold int `db:"csat_low_score_threshold" json:"csat_low_score_threshold"` // 0 = use default (2)
+	RepeatCallThreshold   int `db:"repeat_call_threshold" json:"repeat_call_threshold"`       // 0 = use default (3)
 }
 
 type UserRole string
