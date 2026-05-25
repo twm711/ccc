@@ -10,12 +10,38 @@ import (
 	"github.com/divord97/ccc/pkg/snowflake"
 )
 
+// sensitiveGETPaths lists URL path prefixes where GET requests access
+// privacy-sensitive data and must be audit-logged for compliance.
+var sensitiveGETPaths = []string{
+	"/api/v1/recordings",
+	"/api/v1/audit-logs",
+	"/api/v1/customers",
+	"/api/v1/calls",
+	"/api/v1/agents",
+	"/api/v1/reports",
+	"/api/v1/voicemails",
+	"/api/v1/tickets",
+}
+
+func isSensitiveGET(path string) bool {
+	for _, prefix := range sensitiveGETPaths {
+		if strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func AuditLog(repo platform.AuditLogRepository) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			next.ServeHTTP(w, r)
 
-			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+			if r.Method == http.MethodHead || r.Method == http.MethodOptions {
+				return
+			}
+			// Log all mutating requests; for GET, only log sensitive read paths.
+			if r.Method == http.MethodGet && !isSensitiveGET(r.URL.Path) {
 				return
 			}
 

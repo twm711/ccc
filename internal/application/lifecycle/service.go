@@ -14,8 +14,10 @@ import (
 	"github.com/divord97/ccc/internal/domain/crm"
 	"github.com/divord97/ccc/internal/domain/identity"
 	"github.com/divord97/ccc/internal/infrastructure/esl"
+	"github.com/divord97/ccc/pkg/bizlog"
 	"github.com/divord97/ccc/pkg/metrics"
 	"github.com/divord97/ccc/pkg/snowflake"
+	"github.com/rs/zerolog"
 )
 
 // AgentNotifier pushes real-time events to connected agent WebSocket clients.
@@ -73,6 +75,7 @@ type Service struct {
 	tenantSettings    TenantSettingsLookup
 	recordingAnnounce func(ctx context.Context, tenantID int64) bool
 	qaTrigger         QAAutoTrigger
+	logger            zerolog.Logger
 }
 
 func NewService(
@@ -84,6 +87,7 @@ func NewService(
 	screenPop *screenpop.Service,
 	recordingRepo call.RecordingRepository,
 	eslClient *esl.Client,
+	logger zerolog.Logger,
 ) *Service {
 	return &Service{
 		callSvc:       callSvc,
@@ -94,6 +98,7 @@ func NewService(
 		screenPop:     screenPop,
 		recordingRepo: recordingRepo,
 		eslClient:     eslClient,
+		logger:        logger,
 	}
 }
 
@@ -164,6 +169,11 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 	if err != nil {
 		return nil, err
 	}
+
+	bizlog.CallEvent(s.logger, c.TenantID, c.ID, "call.ended").
+		Str("direction", string(c.Direction)).
+		Str("hangup_reason", string(reason)).
+		Msg("call ended")
 
 	// Hangup FreeSWITCH channel
 	if s.eslClient != nil && c.ChannelUUID != "" {
