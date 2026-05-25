@@ -24,6 +24,7 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/divord97/ccc/internal/application/lifecycle"
@@ -84,6 +85,7 @@ type Service struct {
 	calls      CallLookup
 	logger     zerolog.Logger
 	pollPeriod time.Duration
+	rngMu      sync.Mutex
 	rng        *rand.Rand
 }
 
@@ -304,7 +306,10 @@ func (s *Service) pickAgent(ctx context.Context, sg *identity.SkillGroup, callID
 
 	switch sg.RoutingPolicy {
 	case identity.RoutingPolicyRandom:
-		return candidates[s.rng.Intn(len(candidates))].ID, nil
+		s.rngMu.Lock()
+idx := s.rng.Intn(len(candidates))
+s.rngMu.Unlock()
+return candidates[idx].ID, nil
 	case identity.RoutingPolicyRoundRobin:
 		idx, err := s.rdb.Incr(ctx, roundRobinPrefix+strconv.FormatInt(sg.ID, 10)).Result()
 		if err != nil {

@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/call"
@@ -57,11 +58,22 @@ func (r *Refresher) refreshAll(ctx context.Context) {
 		return
 	}
 
+	// Fan-out tenant refreshes with bounded concurrency to reduce N+1 latency.
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
 	for _, t := range tenants {
-		if err := r.refreshTenant(ctx, t.ID); err != nil {
-			r.logger.Error().Err(err).Int64("tenant_id", t.ID).Msg("dashboard refresher: refresh failed")
-		}
+		t := t
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			if err := r.refreshTenant(ctx, t.ID); err != nil {
+				r.logger.Error().Err(err).Int64("tenant_id", t.ID).Msg("dashboard refresher: refresh failed")
+			}
+		}()
 	}
+	wg.Wait()
 }
 
 func (r *Refresher) refreshTenant(ctx context.Context, tenantID int64) error {

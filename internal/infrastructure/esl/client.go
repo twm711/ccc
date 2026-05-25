@@ -177,6 +177,14 @@ func (c *Client) Acquire(ctx context.Context) (*conn, error) {
 			c.breaker.recordSuccess()
 		}
 		cn.lastUsed = time.Now()
+
+		// Auto-grow: if pool is < 20% available, grow by 2 (non-blocking).
+		poolCap := int(atomic.LoadInt32(&c.poolSize))
+		available := len(c.pool)
+		if poolCap > 0 && available*5 < poolCap {
+			go c.Grow(2)
+		}
+
 		return cn, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()

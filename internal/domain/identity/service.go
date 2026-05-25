@@ -2,12 +2,35 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/divord97/ccc/pkg/snowflake"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// validatePasswordStrength enforces minimum password complexity:
+// at least 8 characters, contains at least one letter and one digit.
+func validatePasswordStrength(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	var hasLetter, hasDigit bool
+	for _, r := range password {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+	}
+	if !hasLetter || !hasDigit {
+		return fmt.Errorf("password must contain at least one letter and one digit")
+	}
+	return nil
+}
 
 type TenantService struct {
 	tenants  TenantRepository
@@ -168,6 +191,9 @@ func (s *UserService) ChangePassword(ctx context.Context, userID int64, oldPassw
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(oldPassword)); err != nil {
 		return ErrWrongPassword
+	}
+	if err := validatePasswordStrength(newPassword); err != nil {
+		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
 	if err != nil {

@@ -7,12 +7,39 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/routing"
 )
+
+// ivrHTTPClient is a dedicated HTTP client for IVR external requests, with a
+// global timeout to prevent resource leaks from misconfigured IVR flows.
+var ivrHTTPClient = &http.Client{Timeout: 30 * time.Second}
+
+// validateURL checks that a URL uses an allowed scheme (http/https) and does
+// not target private/loopback addresses, mitigating SSRF risk.
+func validateURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("ivr: invalid URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("ivr: URL scheme %q not allowed, must be http or https", u.Scheme)
+	}
+	host := strings.ToLower(u.Hostname())
+	if host == "localhost" || host == "127.0.0.1" || host == "::1" ||
+		strings.HasPrefix(host, "10.") ||
+		strings.HasPrefix(host, "192.168.") ||
+		strings.HasPrefix(host, "169.254.") ||
+		strings.HasPrefix(host, "172.") && len(host) > 4 {
+		return fmt.Errorf("ivr: URL host %q is a private/loopback address", host)
+	}
+	return nil
+}
 
 // FunctionHandler invokes an external Webhook/function.
 type FunctionHandler struct{}
@@ -60,7 +87,14 @@ func (h *FunctionHandler) Handle(ctx context.Context, sess *Session, node routin
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	if err := validateURL(url); err != nil {
+		if cfg.OutputVar != "" {
+			sess.Variables[cfg.OutputVar] = ""
+		}
+		return "error", nil
+	}
+
+	resp, err := ivrHTTPClient.Do(req)
 	if err != nil {
 		if cfg.OutputVar != "" {
 			sess.Variables[cfg.OutputVar] = ""
@@ -125,7 +159,11 @@ func (h *HTTPRequestHandler) Handle(ctx context.Context, sess *Session, node rou
 		req.Header.Set(k, interpolateVars(v, sess.Variables))
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	if err := validateURL(url); err != nil {
+		return "error", nil
+	}
+
+	resp, err := ivrHTTPClient.Do(req)
 	if err != nil {
 		return "error", nil
 	}
@@ -227,7 +265,11 @@ func (h *SMSHandler) Handle(ctx context.Context, sess *Session, node routing.Flo
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	if err := validateURL(endpoint); err != nil {
+		return "error", nil
+	}
+
+	resp, err := ivrHTTPClient.Do(req)
 	if err != nil {
 		return "error", nil
 	}

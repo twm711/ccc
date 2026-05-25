@@ -30,6 +30,18 @@ export function useDashboard() {
   return useQuery({ queryKey: ['dashboard'], queryFn: () => dashboardApi.get().then(r => r.data), refetchInterval: 5000 });
 }
 
+export function useDashboardOverview() {
+  return useQuery({ queryKey: ['dashboard', 'overview'], queryFn: () => dashboardApi.overview().then(r => r.data), refetchInterval: 5000 });
+}
+
+export function useDashboardAgents() {
+  return useQuery({ queryKey: ['dashboard', 'agents'], queryFn: () => dashboardApi.agents().then(r => r.data), refetchInterval: 5000 });
+}
+
+export function useDashboardFunnel() {
+  return useQuery({ queryKey: ['dashboard', 'funnel'], queryFn: () => dashboardApi.funnel().then(r => r.data), refetchInterval: 5000 });
+}
+
 export function useCustomers() {
   return useQuery({ queryKey: ['customers'], queryFn: () => customerApi.list().then(r => r.data) });
 }

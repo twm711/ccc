@@ -61,6 +61,11 @@ func (s *Service) Deliver(ctx context.Context, evt Event) {
 		}
 		cfg := cfg // capture loop variable
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error().Interface("panic", r).Int64("config_id", cfg.ID).Msg("webhook: recovered panic in deliver")
+				}
+			}()
 			s.sem <- struct{}{}
 			defer func() { <-s.sem }()
 			s.deliverToConfig(context.Background(), cfg, evt.Type, payloadBytes)

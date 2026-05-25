@@ -60,6 +60,12 @@ func main() {
 
 	cfg := config.Load()
 
+	// Apply log level from config/env
+	if lvl, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
+		zerolog.SetGlobalLevel(lvl)
+		logger = logger.Level(lvl)
+	}
+
 	if cfg.JWT.Secret == "change-me-in-production" {
 		logger.Fatal().Msg("JWT_SECRET must be changed from its default value before running in production")
 	}

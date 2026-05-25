@@ -17,6 +17,7 @@ type Config struct {
 	Storage     StorageConfig
 	NATS        NATSConfig
 	OTEL        OTELConfig
+	LogLevel    string // zerolog level: debug, info, warn, error
 }
 
 // NATSConfig points the lifecycle event publisher at a JetStream-enabled NATS
@@ -146,6 +147,7 @@ func Load() *Config {
 			DashScopeAPIKey: firstEnv("TONGYI_API_KEY", "DASHSCOPE_API_KEY"),
 			DashScopeModel:  firstEnvOr("qwen-plus", "TONGYI_MODEL", "DASHSCOPE_MODEL"),
 		},
+		LogLevel: envOr("LOG_LEVEL", "info"),
 	}
 }
 

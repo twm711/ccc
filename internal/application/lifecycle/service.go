@@ -54,6 +54,11 @@ type QAAutoTrigger interface {
 	AutoInspect(ctx context.Context, tenantID, callID int64)
 }
 
+// RecordingEncryptor encrypts recording file data at rest.
+type RecordingEncryptor interface {
+	Encrypt(keyID string, plaintext []byte) ([]byte, error)
+}
+
 // Service orchestrates cross-domain side effects for call lifecycle events.
 type Service struct {
 	callSvc           *call.CallService
@@ -75,6 +80,8 @@ type Service struct {
 	tenantSettings    TenantSettingsLookup
 	recordingAnnounce func(ctx context.Context, tenantID int64) bool
 	qaTrigger         QAAutoTrigger
+	recEncryptor      RecordingEncryptor
+	recEncryptKeyID   string
 	logger            zerolog.Logger
 }
 
@@ -142,10 +149,23 @@ func (s *Service) SetQAAutoTrigger(t QAAutoTrigger) {
 	s.qaTrigger = t
 }
 
+// SetRecordingEncryptor wires optional at-rest encryption for recordings.
+func (s *Service) SetRecordingEncryptor(enc RecordingEncryptor, keyID string) {
+	s.recEncryptor = enc
+	s.recEncryptKeyID = keyID
+}
+
 // SetConcurrencyGuard wires the per-tenant concurrent call limiter.
 func (s *Service) SetConcurrencyGuard(cg ConcurrencyGuard, tsl TenantSettingsLookup) {
 	s.concurrency = cg
 	s.tenantSettings = tsl
+}
+
+func (s *Service) encryptionAlgo() string {
+	if s.recEncryptor != nil {
+		return "AES-256-GCM"
+	}
+	return ""
 }
 
 func (s *Service) publish(ctx context.Context, subject string, payload interface{}) {
@@ -187,7 +207,7 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 			durSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
 		}
 		recPath := fmt.Sprintf("/recordings/%d/%d.wav", c.TenantID, c.ID)
-		_ = s.recordingRepo.Create(ctx, &call.Recording{
+		if err := s.recordingRepo.Create(ctx, &call.Recording{
 			ID:          snowflake.NextID(),
 			TenantID:    c.TenantID,
 			CallID:      c.ID,
@@ -198,18 +218,26 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 			MimeType:    "audio/wav",
 			StorageTier: "hot",
 			Consent:     true,
-			Status:      "completed",
-			CreatedAt:   time.Now(),
-		})
+			Status:          "completed",
+			EncryptionAlgo:  s.encryptionAlgo(),
+			EncryptionKeyID: s.recEncryptKeyID,
+			CreatedAt:       time.Now(),
+		}); err != nil {
+			s.logger.Error().Err(err).Int64("call_id", c.ID).Msg("recording: create failed")
+		}
 		c.RecordingURL = &recPath
-		_ = s.callSvc.UpdateDurations(ctx, c)
+		if err := s.callSvc.UpdateDurations(ctx, c); err != nil {
+			s.logger.Error().Err(err).Int64("call_id", c.ID).Msg("recording: update durations failed")
+		}
 	}
 
 	// Calculate IVR/queue/ring durations from call events
 	events, _ := s.callSvc.ListEvents(ctx, callID)
 	if len(events) > 0 {
 		s.callSvc.CalculateDurations(c, events)
-		_ = s.callSvc.UpdateDurations(ctx, c)
+		if err := s.callSvc.UpdateDurations(ctx, c); err != nil {
+			s.logger.Error().Err(err).Int64("call_id", c.ID).Msg("durations: update failed")
+		}
 	}
 
 	// Agent → ACW (non-blocking, best-effort)
@@ -223,7 +251,14 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 	}
 
 	// Post-call hooks run asynchronously to avoid blocking the call teardown path.
-	go s.postCallHooksAsync(c)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Error().Interface("panic", r).Int64("call_id", c.ID).Msg("postCallHooksAsync: recovered panic")
+			}
+		}()
+		s.postCallHooksAsync(c)
+	}()
 
 	if c.AnsweredAt == nil && c.Direction == call.DirectionInbound {
 		metrics.CallsAbandoned.Inc()
