@@ -25,6 +25,7 @@ import (
 	"github.com/divord97/ccc/internal/application/ivr"
 	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/application/outbound"
+	"github.com/divord97/ccc/internal/application/postcall"
 	"github.com/divord97/ccc/internal/application/screenpop"
 	"github.com/divord97/ccc/internal/application/transcripthub"
 	"github.com/divord97/ccc/internal/application/trunk"
@@ -47,6 +48,7 @@ import (
 	infraNATS "github.com/divord97/ccc/internal/infrastructure/nats"
 	infraRedis "github.com/divord97/ccc/internal/infrastructure/redis"
 	"github.com/divord97/ccc/internal/infrastructure/storage"
+	"github.com/divord97/ccc/internal/infrastructure/tracing"
 	httpRouter "github.com/divord97/ccc/internal/interfaces/http"
 	"github.com/divord97/ccc/internal/interfaces/http/handler"
 	"github.com/divord97/ccc/pkg/snowflake"
@@ -64,6 +66,23 @@ func main() {
 
 	if err := snowflake.Init(cfg.Snowflake.NodeID); err != nil {
 		logger.Fatal().Err(err).Msg("failed to init snowflake")
+	}
+
+	// OpenTelemetry distributed tracing (optional).
+	if cfg.OTEL.Endpoint != "" {
+		shutdownTracer, err := tracing.Init(context.Background(), tracing.Config{
+			Endpoint:    cfg.OTEL.Endpoint,
+			ServiceName: "ccc-server",
+			Insecure:    cfg.OTEL.Insecure,
+		})
+		if err != nil {
+			logger.Error().Err(err).Msg("otel: init failed, tracing disabled")
+		} else {
+			defer shutdownTracer(context.Background())
+			logger.Info().Str("endpoint", cfg.OTEL.Endpoint).Msg("otel: tracing enabled")
+		}
+	} else {
+		logger.Warn().Msg("otel: OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled")
 	}
 
 	db, err := infraMySQL.NewDB(cfg.Database.DSN)
@@ -243,7 +262,7 @@ func main() {
 	callbackSch := callback.NewScheduler(callbackRepo, callSvc, outboundSvc, logger)
 	screenPopSvc := screenpop.NewService(screenPopConfigRepo, customerSvc)
 	webhookSvc := webhook.NewService(webhookConfigRepo, webhookLogRepo, logger)
-	lifecycleSvc := lifecycle.NewService(callSvc, agentPresenceSvc, csatSvc, webhookSvc, customerSvc, screenPopSvc, recordingRepo, eslClient)
+	lifecycleSvc := lifecycle.NewService(callSvc, agentPresenceSvc, csatSvc, webhookSvc, customerSvc, screenPopSvc, recordingRepo, eslClient, logger)
 	imRouterSvc := imrouter.NewService(imSvc, agentPresenceSvc, skillGroupSvc, logger)
 	trunkMonitor := trunk.NewHealthMonitor(sipTrunkRepo, trunkHealthSvc, logger, eslClient)
 	emailSvc := email.NewService(imSvc, logger)
@@ -343,6 +362,16 @@ func main() {
 			lifecycleSvc.SetEventPublisher(natsClient)
 			defer natsClient.Close()
 			logger.Info().Str("url", cfg.NATS.URL).Str("stream", cfg.NATS.Stream).Msg("nats: event publisher wired")
+
+			// Start NATS consumer for post-call processing (CDR, analytics).
+			postCallWorker := postcall.NewWorker(callRepo, logger)
+			natsConsumer := infraNATS.NewConsumer(natsClient, postCallWorker.HandleMessage)
+			go func() {
+				if err := natsConsumer.Subscribe(context.Background(), cfg.NATS.Stream, "postcall-worker", "ccc.call.>"); err != nil {
+					logger.Error().Err(err).Msg("nats: postcall consumer stopped")
+				}
+			}()
+			logger.Info().Msg("nats: postcall consumer started")
 		}
 	} else {
 		logger.Warn().Msg("nats: NATS_URL not set, event publishing disabled")

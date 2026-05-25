@@ -16,6 +16,7 @@ type Config struct {
 	ServiceAuth ServiceAuthConfig
 	Storage     StorageConfig
 	NATS        NATSConfig
+	OTEL        OTELConfig
 }
 
 // NATSConfig points the lifecycle event publisher at a JetStream-enabled NATS
@@ -23,6 +24,12 @@ type Config struct {
 type NATSConfig struct {
 	URL    string
 	Stream string
+}
+
+// OTELConfig controls OpenTelemetry tracing. Empty Endpoint disables tracing.
+type OTELConfig struct {
+	Endpoint string
+	Insecure bool
 }
 
 type FreeSWITCHConfig struct {
@@ -123,6 +130,10 @@ func Load() *Config {
 		NATS: NATSConfig{
 			URL:    envOr("NATS_URL", ""),
 			Stream: envOr("NATS_STREAM", "CCC_EVENTS"),
+		},
+		OTEL: OTELConfig{
+			Endpoint: envOr("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			Insecure: envOr("OTEL_INSECURE", "true") == "true",
 		},
 		Aliyun: AliyunConfig{
 			AccessKeyID:     firstEnv("ALIBABA_CLOUD_ACCESS_KEY_ID", "ALIBABA_ACCESS_KEY_ID", "ALIYUN_ACCESS_KEY_ID"),

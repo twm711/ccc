@@ -26,6 +26,10 @@ type Client struct {
 	breaker  *circuitBreaker
 	closed   int32 // atomic: 1 = closed
 	maxIdle  time.Duration
+	poolSize int32 // atomic: current pool capacity
+	minPool  int
+	maxPool  int
+	nextID   int32 // atomic: monotonic conn ID
 }
 
 type conn struct {
@@ -51,6 +55,8 @@ type Config struct {
 	Port     int
 	Password string
 	PoolSize int
+	MinPool  int
+	MaxPool  int
 	Logger   zerolog.Logger
 }
 
@@ -58,26 +64,90 @@ func NewClient(cfg Config) *Client {
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = 5
 	}
+	if cfg.MinPool <= 0 {
+		cfg.MinPool = cfg.PoolSize
+	}
+	if cfg.MaxPool <= 0 {
+		cfg.MaxPool = cfg.PoolSize * 4
+	}
+	if cfg.MaxPool < cfg.PoolSize {
+		cfg.MaxPool = cfg.PoolSize
+	}
 
 	c := &Client{
 		host:    cfg.Host,
 		port:    cfg.Port,
 		pass:    cfg.Password,
-		pool:    make(chan *conn, cfg.PoolSize),
+		pool:    make(chan *conn, cfg.MaxPool),
 		logger:  cfg.Logger,
 		maxIdle: 5 * time.Minute,
+		minPool: cfg.MinPool,
+		maxPool: cfg.MaxPool,
 		breaker: &circuitBreaker{
 			threshold:    5,
 			state:        "closed",
 			resetTimeout: 30 * time.Second,
 		},
 	}
+	atomic.StoreInt32(&c.poolSize, int32(cfg.PoolSize))
+	atomic.StoreInt32(&c.nextID, int32(cfg.PoolSize))
 
 	for i := 0; i < cfg.PoolSize; i++ {
 		c.pool <- &conn{id: i, connected: false}
 	}
 
 	return c
+}
+
+// Grow adds n connections to the pool up to maxPool.
+func (c *Client) Grow(n int) int {
+	added := 0
+	for i := 0; i < n; i++ {
+		cur := atomic.LoadInt32(&c.poolSize)
+		if int(cur) >= c.maxPool {
+			break
+		}
+		if !atomic.CompareAndSwapInt32(&c.poolSize, cur, cur+1) {
+			continue
+		}
+		id := int(atomic.AddInt32(&c.nextID, 1) - 1)
+		c.pool <- &conn{id: id, connected: false}
+		added++
+	}
+	if added > 0 {
+		c.logger.Info().Int("added", added).Int32("total", atomic.LoadInt32(&c.poolSize)).Msg("esl pool: grow")
+	}
+	return added
+}
+
+// Shrink removes n idle connections from the pool down to minPool.
+func (c *Client) Shrink(n int) int {
+	removed := 0
+	for i := 0; i < n; i++ {
+		cur := atomic.LoadInt32(&c.poolSize)
+		if int(cur) <= c.minPool {
+			break
+		}
+		select {
+		case cn := <-c.pool:
+			if cn != nil && cn.tcpConn != nil {
+				cn.tcpConn.Close()
+			}
+			atomic.AddInt32(&c.poolSize, -1)
+			removed++
+		default:
+			return removed
+		}
+	}
+	if removed > 0 {
+		c.logger.Info().Int("removed", removed).Int32("total", atomic.LoadInt32(&c.poolSize)).Msg("esl pool: shrink")
+	}
+	return removed
+}
+
+// PoolSize returns the current pool capacity.
+func (c *Client) PoolSize() int {
+	return int(atomic.LoadInt32(&c.poolSize))
 }
 
 func (c *Client) Acquire(ctx context.Context) (*conn, error) {
