@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/divord97/ccc/pkg/redact"
 	"github.com/divord97/ccc/pkg/wsutil"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
@@ -72,6 +73,7 @@ func (h *Hub) Unregister(c *Client) {
 }
 
 func (h *Hub) Broadcast(callID int64, event TranscriptEvent) {
+	event.Text = redact.Text(event.Text)
 	data, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -82,6 +84,7 @@ func (h *Hub) Broadcast(callID int64, event TranscriptEvent) {
 		select {
 		case c.Send <- data:
 		default:
+			h.logger.Warn().Int64("call_id", callID).Msg("transcript ws: send buffer full, dropping")
 		}
 	}
 }
