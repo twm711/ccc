@@ -26,6 +26,10 @@ type Client struct {
 	breaker  *circuitBreaker
 	closed   int32 // atomic: 1 = closed
 	maxIdle  time.Duration
+	poolSize int32 // atomic: current pool capacity
+	minPool  int
+	maxPool  int
+	nextID   int32 // atomic: monotonic conn ID
 }
 
 type conn struct {
@@ -51,6 +55,8 @@ type Config struct {
 	Port     int
 	Password string
 	PoolSize int
+	MinPool  int
+	MaxPool  int
 	Logger   zerolog.Logger
 }
 
@@ -58,26 +64,136 @@ func NewClient(cfg Config) *Client {
 	if cfg.PoolSize <= 0 {
 		cfg.PoolSize = 5
 	}
+	if cfg.MinPool <= 0 {
+		cfg.MinPool = cfg.PoolSize
+	}
+	if cfg.MaxPool <= 0 {
+		cfg.MaxPool = cfg.PoolSize * 4
+	}
+	if cfg.MaxPool < cfg.PoolSize {
+		cfg.MaxPool = cfg.PoolSize
+	}
 
 	c := &Client{
 		host:    cfg.Host,
 		port:    cfg.Port,
 		pass:    cfg.Password,
-		pool:    make(chan *conn, cfg.PoolSize),
+		pool:    make(chan *conn, cfg.MaxPool),
 		logger:  cfg.Logger,
 		maxIdle: 5 * time.Minute,
+		minPool: cfg.MinPool,
+		maxPool: cfg.MaxPool,
 		breaker: &circuitBreaker{
 			threshold:    5,
 			state:        "closed",
 			resetTimeout: 30 * time.Second,
 		},
 	}
+	atomic.StoreInt32(&c.poolSize, int32(cfg.PoolSize))
+	atomic.StoreInt32(&c.nextID, int32(cfg.PoolSize))
 
 	for i := 0; i < cfg.PoolSize; i++ {
 		c.pool <- &conn{id: i, connected: false}
 	}
 
 	return c
+}
+
+// Grow adds n connections to the pool up to maxPool.
+func (c *Client) Grow(n int) int {
+	added := 0
+	for i := 0; i < n; i++ {
+		cur := atomic.LoadInt32(&c.poolSize)
+		if int(cur) >= c.maxPool {
+			break
+		}
+		if !atomic.CompareAndSwapInt32(&c.poolSize, cur, cur+1) {
+			continue
+		}
+		id := int(atomic.AddInt32(&c.nextID, 1) - 1)
+		c.pool <- &conn{id: id, connected: false}
+		added++
+	}
+	if added > 0 {
+		c.logger.Info().Int("added", added).Int32("total", atomic.LoadInt32(&c.poolSize)).Msg("esl pool: grow")
+	}
+	return added
+}
+
+// AutoScale runs a background loop that grows the pool under contention and
+// shrinks it back toward minPool when idle. Should be called once after
+// NewClient; the loop exits when ctx is cancelled.
+//
+// Heuristic: every interval, if pool is >80% utilised, grow by 1; if <20%
+// utilised for two consecutive ticks, shrink by 1.
+func (c *Client) AutoScale(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	idleTicks := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			size := c.PoolSize()
+			if size == 0 {
+				continue
+			}
+			available := len(c.pool)
+			utilization := float64(size-available) / float64(size)
+			switch {
+			case utilization > 0.8:
+				c.Grow(1)
+				idleTicks = 0
+			case utilization < 0.2:
+				idleTicks++
+				if idleTicks >= 2 {
+					c.Shrink(1)
+					idleTicks = 0
+				}
+			default:
+				idleTicks = 0
+			}
+		}
+	}
+}
+
+// Shrink removes n idle connections from the pool down to minPool.
+func (c *Client) Shrink(n int) int {
+	removed := 0
+	for i := 0; i < n; i++ {
+		cur := atomic.LoadInt32(&c.poolSize)
+		if int(cur) <= c.minPool {
+			break
+		}
+		if !atomic.CompareAndSwapInt32(&c.poolSize, cur, cur-1) {
+			i-- // retry
+			continue
+		}
+		select {
+		case cn := <-c.pool:
+			if cn != nil && cn.tcpConn != nil {
+				cn.tcpConn.Close()
+			}
+			removed++
+		default:
+			// No idle conn available; restore the counter.
+			atomic.AddInt32(&c.poolSize, 1)
+			return removed
+		}
+	}
+	if removed > 0 {
+		c.logger.Info().Int("removed", removed).Int32("total", atomic.LoadInt32(&c.poolSize)).Msg("esl pool: shrink")
+	}
+	return removed
+}
+
+// PoolSize returns the current pool capacity.
+func (c *Client) PoolSize() int {
+	return int(atomic.LoadInt32(&c.poolSize))
 }
 
 func (c *Client) Acquire(ctx context.Context) (*conn, error) {
@@ -107,6 +223,14 @@ func (c *Client) Acquire(ctx context.Context) (*conn, error) {
 			c.breaker.recordSuccess()
 		}
 		cn.lastUsed = time.Now()
+
+		// Auto-grow: if pool is < 20% available, grow by 2 (non-blocking).
+		poolCap := int(atomic.LoadInt32(&c.poolSize))
+		available := len(c.pool)
+		if poolCap > 0 && available*5 < poolCap {
+			go c.Grow(2)
+		}
+
 		return cn, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -384,6 +508,27 @@ func (c *Client) FlashSMS(ctx context.Context, from, to, message string) error {
 	cmd := fmt.Sprintf("chat sms|%s|%s|%s", sanitizeParam(from), sanitizeParam(to), sanitizeParam(message))
 	_, err := c.SendCommand(ctx, cmd)
 	return err
+}
+
+// StartHealthCheck periodically sends a status command to verify ESL connectivity.
+func (c *Client) StartHealthCheck(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if atomic.LoadInt32(&c.closed) == 1 {
+				return
+			}
+			checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if _, err := c.SendCommand(checkCtx, "api status"); err != nil {
+				c.logger.Warn().Err(err).Msg("esl health check: ping failed")
+			}
+			cancel()
+		}
+	}
 }
 
 func (c *Client) Close() {

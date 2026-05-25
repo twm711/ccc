@@ -261,5 +261,5 @@ func TestIVRFlowService_Validate_BrokenExitTarget(t *testing.T) {
 }
 
 func TestAllNodeTypes_Count(t *testing.T) {
-	assert.Equal(t, 20, len(AllNodeTypes), fmt.Sprintf("expected 20 node types, got %d", len(AllNodeTypes)))
+	assert.Equal(t, 24, len(AllNodeTypes), fmt.Sprintf("expected 24 node types, got %d", len(AllNodeTypes)))
 }

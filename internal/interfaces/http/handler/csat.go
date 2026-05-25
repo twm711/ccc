@@ -9,6 +9,7 @@ import (
 	"github.com/divord97/ccc/internal/application/csat"
 	"github.com/divord97/ccc/internal/domain/integration"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/divord97/ccc/pkg/snowflake"
 	"github.com/go-chi/chi/v5"
@@ -43,11 +44,7 @@ func (h *CSATHandler) CreateConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *CSATHandler) ListConfigs(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 
 	items, total, err := h.configs.List(r.Context(), tenantID, offset, limit)
 	if err != nil {
@@ -98,11 +95,7 @@ func (h *CSATHandler) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 func (h *CSATHandler) ListResults(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 50
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 50, 200)
 
 	items, total, err := h.results.List(r.Context(), tenantID, offset, limit)
 	if err != nil {

@@ -9,10 +9,11 @@ import (
 )
 
 type CustomerService struct {
-	customers    CustomerRepository
-	phones       CustomerPhoneRepository
-	interactions CustomerInteractionRepository
-	fields       CustomFieldDefinitionRepository
+	customers      CustomerRepository
+	phones         CustomerPhoneRepository
+	interactions   CustomerInteractionRepository
+	fields         CustomFieldDefinitionRepository
+	erasureAuditor ErasureAuditor
 }
 
 func NewCustomerService(
@@ -231,4 +232,77 @@ func (s *CustomerService) BatchImport(ctx context.Context, records []CreateCusto
 		result.Success++
 	}
 	return result, nil
+}
+
+// ErasureAuditor records GDPR erasure events for compliance.
+type ErasureAuditor interface {
+	RecordErasure(ctx context.Context, tenantID, customerID, requestedBy int64) error
+}
+
+// EraseCustomer permanently deletes all customer data (GDPR Art. 17 Right to Erasure).
+func (s *CustomerService) EraseCustomer(ctx context.Context, tenantID, customerID, requestedBy int64) error {
+	c, err := s.customers.GetByID(ctx, customerID)
+	if err != nil || c == nil {
+		return ErrCustomerNotFound
+	}
+	if c.TenantID != tenantID {
+		return ErrCustomerNotFound
+	}
+	if err := s.interactions.DeleteByCustomer(ctx, customerID); err != nil {
+		return fmt.Errorf("gdpr: failed to delete interactions: %w", err)
+	}
+	if err := s.phones.DeleteByCustomer(ctx, customerID); err != nil {
+		return fmt.Errorf("gdpr: failed to delete phones: %w", err)
+	}
+	if err := s.customers.Delete(ctx, customerID); err != nil {
+		return fmt.Errorf("gdpr: failed to delete customer: %w", err)
+	}
+	if s.erasureAuditor != nil {
+		_ = s.erasureAuditor.RecordErasure(ctx, tenantID, customerID, requestedBy)
+	}
+	return nil
+}
+
+// SetErasureAuditor configures the GDPR erasure audit logger.
+func (s *CustomerService) SetErasureAuditor(a ErasureAuditor) { s.erasureAuditor = a }
+
+// CustomerJourney aggregates a customer's cross-channel interaction timeline.
+type CustomerJourney struct {
+	Customer     *Customer              `json:"customer"`
+	Phones       []*CustomerPhone       `json:"phones"`
+	Interactions []*CustomerInteraction  `json:"interactions"`
+	ChannelStats map[string]int         `json:"channel_stats"`
+	FirstContact *time.Time             `json:"first_contact,omitempty"`
+	LastContact  *time.Time             `json:"last_contact,omitempty"`
+	TotalContacts int                   `json:"total_contacts"`
+}
+
+// GetJourney returns a full customer journey view with interaction timeline and channel stats.
+func (s *CustomerService) GetJourney(ctx context.Context, customerID int64) (*CustomerJourney, error) {
+	c, err := s.customers.GetByID(ctx, customerID)
+	if err != nil || c == nil {
+		return nil, ErrCustomerNotFound
+	}
+	phones, _ := s.phones.ListByCustomer(ctx, customerID)
+	interactions, _ := s.interactions.ListByCustomer(ctx, customerID, 0, 500)
+
+	journey := &CustomerJourney{
+		Customer:     c,
+		Phones:       phones,
+		Interactions: interactions,
+		ChannelStats: make(map[string]int),
+		TotalContacts: len(interactions),
+	}
+	for _, ix := range interactions {
+		journey.ChannelStats[ix.Channel]++
+		if journey.FirstContact == nil || ix.CreatedAt.Before(*journey.FirstContact) {
+			t := ix.CreatedAt
+			journey.FirstContact = &t
+		}
+		if journey.LastContact == nil || ix.CreatedAt.After(*journey.LastContact) {
+			t := ix.CreatedAt
+			journey.LastContact = &t
+		}
+	}
+	return journey, nil
 }

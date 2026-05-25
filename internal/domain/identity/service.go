@@ -2,12 +2,35 @@ package identity
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/divord97/ccc/pkg/snowflake"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// validatePasswordStrength enforces minimum password complexity:
+// at least 8 characters, contains at least one letter and one digit.
+func validatePasswordStrength(password string) error {
+	if len(password) < 8 {
+		return fmt.Errorf("password must be at least 8 characters")
+	}
+	var hasLetter, hasDigit bool
+	for _, r := range password {
+		if unicode.IsLetter(r) {
+			hasLetter = true
+		}
+		if unicode.IsDigit(r) {
+			hasDigit = true
+		}
+	}
+	if !hasLetter || !hasDigit {
+		return fmt.Errorf("password must contain at least one letter and one digit")
+	}
+	return nil
+}
 
 type TenantService struct {
 	tenants  TenantRepository
@@ -169,7 +192,10 @@ func (s *UserService) ChangePassword(ctx context.Context, userID int64, oldPassw
 	if err := bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(oldPassword)); err != nil {
 		return ErrWrongPassword
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err := validatePasswordStrength(newPassword); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
 	if err != nil {
 		return err
 	}
@@ -351,16 +377,31 @@ func (s *SkillGroupService) GetMembers(ctx context.Context, skillGroupID int64) 
 
 // --- AgentPresenceService ---
 
+// PresenceChangeHook is called after an agent's presence status changes.
+type PresenceChangeHook func(ctx context.Context, p *AgentPresence, oldStatus AgentPresenceStatus)
+
 type AgentPresenceService struct {
 	presence    AgentPresenceRepository
 	logs        AgentPresenceLogRepository
+	shifts      AgentShiftLogRepository
 	acwTimers   map[int64]func()
 	acwResolver func(ctx context.Context, tenantID, agentID int64) int
+	changeHooks []PresenceChangeHook
 	mu          sync.Mutex
+}
+
+// OnPresenceChange registers a hook that fires after every status transition.
+func (s *AgentPresenceService) OnPresenceChange(h PresenceChangeHook) {
+	s.changeHooks = append(s.changeHooks, h)
 }
 
 func NewAgentPresenceService(pr AgentPresenceRepository, lr AgentPresenceLogRepository) *AgentPresenceService {
 	return &AgentPresenceService{presence: pr, logs: lr, acwTimers: make(map[int64]func())}
+}
+
+// SetShiftLogRepo wires the shift log repository for check-in/check-out auditing.
+func (s *AgentPresenceService) SetShiftLogRepo(r AgentShiftLogRepository) {
+	s.shifts = r
 }
 
 // SetACWResolver wires a callback that returns the effective ACW seconds for
@@ -408,6 +449,15 @@ func (s *AgentPresenceService) CheckIn(ctx context.Context, tenantID, agentID in
 	if err := s.presence.Upsert(ctx, p); err != nil {
 		return nil, err
 	}
+	if s.shifts != nil {
+		_ = s.shifts.Create(ctx, &AgentShiftLog{
+			ID:        snowflake.NextID(),
+			TenantID:  tenantID,
+			AgentID:   agentID,
+			ShiftDate: now.Format("2006-01-02"),
+			CheckInAt: now,
+		})
+	}
 	return p, nil
 }
 
@@ -417,11 +467,18 @@ func (s *AgentPresenceService) CheckOut(ctx context.Context, agentID int64) erro
 		return ErrPresenceNotFound
 	}
 	s.logTransition(ctx, p)
+	now := time.Now()
+	if s.shifts != nil {
+		if shift, err := s.shifts.GetOpenShift(ctx, agentID); err == nil && shift != nil {
+			dur := int(now.Sub(shift.CheckInAt).Seconds())
+			_ = s.shifts.EndShift(ctx, shift.ID, now, dur)
+		}
+	}
 	p.Status = PresenceOffline
 	p.SubState = SubStateNone
 	p.CurrentCallID = nil
-	p.UpdatedAt = time.Now()
-	p.LastStatusAt = p.UpdatedAt
+	p.UpdatedAt = now
+	p.LastStatusAt = now
 	return s.presence.Upsert(ctx, p)
 }
 
@@ -435,6 +492,7 @@ func (s *AgentPresenceService) TransitionTo(ctx context.Context, agentID int64, 
 	}
 	s.logTransition(ctx, p)
 	s.cancelACWTimer(agentID)
+	oldStatus := p.Status
 	p.Status = newStatus
 	if newStatus != PresenceTalking {
 		p.SubState = SubStateNone
@@ -448,6 +506,10 @@ func (s *AgentPresenceService) TransitionTo(ctx context.Context, agentID int64, 
 	p.LastStatusAt = p.UpdatedAt
 	if err := s.presence.Upsert(ctx, p); err != nil {
 		return nil, err
+	}
+	for _, h := range s.changeHooks {
+		h := h
+		go h(context.Background(), p, oldStatus)
 	}
 	return p, nil
 }
@@ -546,6 +608,52 @@ func (s *AgentPresenceService) scheduleACWTimeout(agentID int64, seconds int) {
 		delete(s.acwTimers, agentID)
 		s.mu.Unlock()
 	}()
+}
+
+// ResetGhostAgents scans agents whose presence row is stale and corrects them.
+// Two zombie classes are handled:
+//
+//  1. Stuck "active" agents — talking/dialing for longer than maxDuration with no
+//     heartbeat. These are reset to idle (call leg likely already torn down by
+//     FreeSWITCH but the lifecycle update was lost).
+//  2. Stale "online/idle" presence — heartbeat older than 3×maxDuration. These
+//     agents likely closed their browser without logging out; we mark them
+//     offline so ACD doesn't try to route to a phantom.
+//
+// Returns the total number of agents whose presence row was changed.
+func (s *AgentPresenceService) ResetGhostAgents(ctx context.Context, tenantID int64, maxDuration time.Duration) (int, error) {
+	presences, err := s.presence.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	var resetCount int
+	now := time.Now()
+	staleHeartbeat := 3 * maxDuration
+	for _, p := range presences {
+		switch {
+		case (p.Status == PresenceTalking || p.Status == PresenceDialing) && now.Sub(p.LastStatusAt) > maxDuration:
+			s.logTransition(ctx, p)
+			p.Status = PresenceIdle
+			p.SubState = SubStateNone
+			p.CurrentCallID = nil
+			p.UpdatedAt = now
+			p.LastStatusAt = now
+			if err := s.presence.Upsert(ctx, p); err == nil {
+				resetCount++
+			}
+		case (p.Status == PresenceOnline || p.Status == PresenceIdle || p.Status == PresenceACW) && now.Sub(p.UpdatedAt) > staleHeartbeat:
+			s.logTransition(ctx, p)
+			p.Status = PresenceOffline
+			p.SubState = SubStateNone
+			p.CurrentCallID = nil
+			p.UpdatedAt = now
+			p.LastStatusAt = now
+			if err := s.presence.Upsert(ctx, p); err == nil {
+				resetCount++
+			}
+		}
+	}
+	return resetCount, nil
 }
 
 func (s *AgentPresenceService) GetPresence(ctx context.Context, agentID int64) (*AgentPresence, error) {

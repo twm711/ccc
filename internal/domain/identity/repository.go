@@ -1,6 +1,9 @@
 package identity
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type TenantRepository interface {
 	Create(ctx context.Context, t *Tenant) error
@@ -59,4 +62,10 @@ type AgentPresenceRepository interface {
 type AgentPresenceLogRepository interface {
 	Create(ctx context.Context, l *AgentPresenceLog) error
 	ListByAgent(ctx context.Context, agentID int64, offset, limit int) ([]*AgentPresenceLog, int64, error)
+}
+
+type AgentShiftLogRepository interface {
+	Create(ctx context.Context, l *AgentShiftLog) error
+	EndShift(ctx context.Context, id int64, checkOutAt time.Time, totalOnlineSec int) error
+	GetOpenShift(ctx context.Context, agentID int64) (*AgentShiftLog, error)
 }

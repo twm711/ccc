@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/divord97/ccc/internal/application/dialer"
+	"github.com/divord97/ccc/internal/application/screenpop"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/internal/domain/campaign"
 	"github.com/divord97/ccc/internal/domain/crm"
@@ -33,14 +34,44 @@ func (h *SupervisorHandler) ActiveCalls(w http.ResponseWriter, r *http.Request) 
 
 type ScreenPopHandler struct {
 	customerSvc *crm.CustomerService
+	screenPop   *screenpop.Service
+	callSvc     *call.CallService
 }
 
-func NewScreenPopHandler(customerSvc *crm.CustomerService) *ScreenPopHandler {
-	return &ScreenPopHandler{customerSvc: customerSvc}
+func NewScreenPopHandler(customerSvc *crm.CustomerService, screenPopSvc *screenpop.Service, callSvc *call.CallService) *ScreenPopHandler {
+	return &ScreenPopHandler{customerSvc: customerSvc, screenPop: screenPopSvc, callSvc: callSvc}
 }
 
+// Lookup answers screen pop queries. Prefers call_id (returns full ScreenPopData
+// including URL templates and IVR context); falls back to phone-only lookup for
+// callers that don't yet have a call ID (e.g., legacy widget).
 func (h *ScreenPopHandler) Lookup(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
+
+	if callIDStr := r.URL.Query().Get("call_id"); callIDStr != "" && h.screenPop != nil && h.callSvc != nil {
+		callID, _ := strconv.ParseInt(callIDStr, 10, 64)
+		c, err := h.callSvc.GetByID(r.Context(), callID)
+		if err != nil || c == nil || c.TenantID != tenantID {
+			response.JSON(w, http.StatusOK, map[string]interface{}{"customer": nil})
+			return
+		}
+		info := screenpop.CallInfo{
+			CallID:       c.ID,
+			Caller:       c.Caller,
+			Callee:       c.Callee,
+			Direction:    string(c.Direction),
+			SkillGroupID: c.SkillGroupID,
+			AgentUserID:  c.AgentUserID,
+		}
+		data, err := h.screenPop.BuildScreenPop(r.Context(), tenantID, info)
+		if err != nil {
+			response.Error(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		response.JSON(w, http.StatusOK, data)
+		return
+	}
+
 	phone := r.URL.Query().Get("phone")
 	if phone == "" {
 		response.JSON(w, http.StatusOK, map[string]interface{}{"customer": nil})

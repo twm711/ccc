@@ -23,6 +23,9 @@ type CallRepository interface {
 	Update(ctx context.Context, c *Call) error
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*Call, int64, error)
 	ListWithFilter(ctx context.Context, tenantID int64, filter CallListFilter, offset, limit int) ([]*Call, int64, error)
+	ListWithCursor(ctx context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error)
+	CountTodayByTenant(ctx context.Context, tenantID int64) (total, inbound, outbound, answered, abandoned, active, queued int, err error)
+	SLATodayByTenant(ctx context.Context, tenantID int64) (avgWaitSec float64, answeredWithin20s int, totalOffered int, longestWaitSec int, err error)
 }
 
 type CallEventRepository interface {
@@ -40,6 +43,11 @@ type RecordingRepository interface {
 	GetByID(ctx context.Context, id int64) (*Recording, error)
 	GetByCallID(ctx context.Context, callID int64) (*Recording, error)
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*Recording, int64, error)
+}
+
+// RecordingAccessLogger records access events for recording stream/download.
+type RecordingAccessLogger interface {
+	LogAccess(ctx context.Context, tenantID, userID, recordingID int64, action, ip string)
 }
 
 type QueueSnapshotRepository interface {

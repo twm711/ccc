@@ -1,8 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Table, Card, Input, Select, DatePicker, Button, Space, Tag, Drawer, Descriptions, Timeline } from 'antd';
+import { Table, Card, Input, Select, DatePicker, Button, Space, Tag, Drawer, Descriptions, Timeline, Empty } from 'antd';
 import { SearchOutlined, PlayCircleOutlined, DownloadOutlined, ReloadOutlined } from '@ant-design/icons';
-import { callApi } from '../../api/endpoints';
+import { callApi, ticketApi } from '../../api/endpoints';
 import dayjs from 'dayjs';
+
+interface RelatedTicket {
+  id: number;
+  subject: string;
+  status: string;
+  priority: string;
+  created_at: string;
+}
 
 const typeColors: Record<string, string> = {
   INBOUND: 'green', OUTBOUND: 'blue', INTERNAL: 'purple', BACK2BACK: 'orange',
@@ -36,6 +44,17 @@ export default function CallRecordPage() {
   const [loading, setLoading] = useState(false);
   const [detail, setDetail] = useState<Call | null>(null);
   const [filters, setFilters] = useState<Record<string, string>>({});
+  const [relatedTickets, setRelatedTickets] = useState<RelatedTicket[]>([]);
+
+  useEffect(() => {
+    if (!detail) { setRelatedTickets([]); return; }
+    ticketApi.listByCall(detail.id)
+      .then((res) => {
+        const items = (res.data as { items?: RelatedTicket[] })?.items || [];
+        setRelatedTickets(items);
+      })
+      .catch(() => setRelatedTickets([]));
+  }, [detail]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -50,7 +69,28 @@ export default function CallRecordPage() {
 
   return (
     <>
-      <Card title="通话记录" extra={<Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>}>
+      <Card
+        title="通话记录"
+        extra={
+          <Space>
+            <Button
+              icon={<DownloadOutlined />}
+              onClick={() => {
+                const qs = new URLSearchParams();
+                if (filters.phone) qs.set('caller', filters.phone);
+                if (filters.call_type) qs.set('call_type', filters.call_type);
+                if (filters.status) qs.set('status', filters.status);
+                if (filters.start_date) qs.set('start_from', filters.start_date);
+                if (filters.end_date) qs.set('start_to', filters.end_date);
+                window.open(`/api/v1/calls/export?${qs.toString()}`, '_blank');
+              }}
+            >
+              导出CSV
+            </Button>
+            <Button icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+          </Space>
+        }
+      >
         <Space wrap style={{ marginBottom: 16 }}>
           <Input prefix={<SearchOutlined />} placeholder="搜索号码" onChange={(e) => setFilters({ ...filters, phone: e.target.value })} style={{ width: 180 }} allowClear />
           <Select placeholder="通话类型" allowClear style={{ width: 140 }} onChange={(v) => setFilters({ ...filters, call_type: v })} options={Object.keys(typeColors).map((k) => ({ value: k, label: k }))} />
@@ -114,6 +154,25 @@ export default function CallRecordPage() {
                 }))} />
               </Card>
             )}
+            <Card title="关联工单" size="small" style={{ marginTop: 16 }}>
+              {relatedTickets.length === 0 ? (
+                <Empty description="无关联工单" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+              ) : (
+                <Table
+                  size="small"
+                  rowKey="id"
+                  pagination={false}
+                  dataSource={relatedTickets}
+                  columns={[
+                    { title: '工单号', dataIndex: 'id', width: 80 },
+                    { title: '主题', dataIndex: 'subject' },
+                    { title: '状态', dataIndex: 'status', width: 90, render: (s) => <Tag>{s}</Tag> },
+                    { title: '优先级', dataIndex: 'priority', width: 80 },
+                    { title: '创建时间', dataIndex: 'created_at', width: 160, render: (t) => t ? dayjs(t).format('MM-DD HH:mm') : '-' },
+                  ]}
+                />
+              )}
+            </Card>
           </>
         )}
       </Drawer>

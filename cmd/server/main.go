@@ -16,6 +16,7 @@ import (
 	"github.com/divord97/ccc/internal/application/b2b"
 	"github.com/divord97/ccc/internal/application/callback"
 	"github.com/divord97/ccc/internal/application/csat"
+	appSms "github.com/divord97/ccc/internal/application/sms"
 	"github.com/divord97/ccc/internal/application/dashboard"
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/application/email"
@@ -25,6 +26,7 @@ import (
 	"github.com/divord97/ccc/internal/application/ivr"
 	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/application/outbound"
+	"github.com/divord97/ccc/internal/application/postcall"
 	"github.com/divord97/ccc/internal/application/screenpop"
 	"github.com/divord97/ccc/internal/application/transcripthub"
 	"github.com/divord97/ccc/internal/application/trunk"
@@ -47,9 +49,11 @@ import (
 	infraNATS "github.com/divord97/ccc/internal/infrastructure/nats"
 	infraRedis "github.com/divord97/ccc/internal/infrastructure/redis"
 	"github.com/divord97/ccc/internal/infrastructure/storage"
+	"github.com/divord97/ccc/internal/infrastructure/tracing"
 	httpRouter "github.com/divord97/ccc/internal/interfaces/http"
 	"github.com/divord97/ccc/internal/interfaces/http/handler"
 	"github.com/divord97/ccc/pkg/snowflake"
+	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
 
@@ -58,8 +62,35 @@ func main() {
 
 	cfg := config.Load()
 
+	// Apply log level from config/env
+	if lvl, err := zerolog.ParseLevel(cfg.LogLevel); err == nil {
+		zerolog.SetGlobalLevel(lvl)
+		logger = logger.Level(lvl)
+	}
+
+	if cfg.JWT.Secret == "change-me-in-production" {
+		logger.Fatal().Msg("JWT_SECRET must be changed from its default value before running in production")
+	}
+
 	if err := snowflake.Init(cfg.Snowflake.NodeID); err != nil {
 		logger.Fatal().Err(err).Msg("failed to init snowflake")
+	}
+
+	// OpenTelemetry distributed tracing (optional).
+	if cfg.OTEL.Endpoint != "" {
+		shutdownTracer, err := tracing.Init(context.Background(), tracing.Config{
+			Endpoint:    cfg.OTEL.Endpoint,
+			ServiceName: "ccc-server",
+			Insecure:    cfg.OTEL.Insecure,
+		})
+		if err != nil {
+			logger.Error().Err(err).Msg("otel: init failed, tracing disabled")
+		} else {
+			defer shutdownTracer(context.Background())
+			logger.Info().Str("endpoint", cfg.OTEL.Endpoint).Msg("otel: tracing enabled")
+		}
+	} else {
+		logger.Warn().Msg("otel: OTEL_EXPORTER_OTLP_ENDPOINT not set, tracing disabled")
 	}
 
 	db, err := infraMySQL.NewDB(cfg.Database.DSN)
@@ -113,6 +144,7 @@ func main() {
 	callbackRepo := infraMySQL.NewCallbackRequestRepo(db)
 	agentPresenceRepo := infraMySQL.NewAgentPresenceRepo(db)
 	agentPresenceLogRepo := infraMySQL.NewAgentPresenceLogRepo(db)
+	agentShiftLogRepo := infraMySQL.NewAgentShiftLogRepo(db)
 	webhookConfigRepo := infraMySQL.NewWebhookConfigRepo(db)
 	webhookLogRepo := infraMySQL.NewWebhookDeliveryLogRepo(db)
 	screenPopConfigRepo := infraMySQL.NewScreenPopConfigRepo(db)
@@ -169,11 +201,13 @@ func main() {
 			Logger:   logger,
 		})
 		callSvc.SetTelephonyProvider(esl.NewTelephonyAdapter(eslClient))
+		go eslClient.AutoScale(context.Background(), time.Duration(cfg.Tuning.ESLAutoScaleSec)*time.Second)
 		logger.Info().Str("host", cfg.FreeSWITCH.Host).Msg("ESL: FreeSWITCH telephony provider configured")
 	} else {
 		logger.Warn().Msg("ESL: FREESWITCH_HOST not set, telephony commands disabled")
 	}
 	agentPresenceSvc := identity.NewAgentPresenceService(agentPresenceRepo, agentPresenceLogRepo)
+	agentPresenceSvc.SetShiftLogRepo(agentShiftLogRepo)
 	// Resolve effective ACW seconds for an agent: prefer agent.acw_seconds,
 	// then tenant_settings.default_acw_seconds. This wiring fixes a P1 defect
 	// where agent_presence rows never carried an ACWSeconds value, so the
@@ -222,6 +256,12 @@ func main() {
 	// --- Application Services ---
 	outboundSvc := outbound.NewService(callSvc, routingSvc, cliSvc, dncSvc, eslClient)
 	csatSvc := csat.NewService(csatConfigRepo, csatResultRepo, logger)
+	// Wire SMS sender into CSAT so SMS surveys are actually delivered.
+	if cfg.Aliyun.AccessKeyID != "" {
+		smsSvc := appSms.NewServiceWithAliyun(smsConfigRepo, cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret, logger)
+		csatSvc.SetSMSSender(csatSMSAdapter{sms: smsSvc})
+		csatSvc.SetCallerLookup(csatCallerAdapter{calls: callRepo})
+	}
 	dialerSvc := dialer.NewService(campaignSvc, eslClient, logger)
 	// Wire dialer to use outbound service for DNC/routing/CLI compliance
 	dialerSvc.SetDialFunc(func(ctx context.Context, tenantID int64, callee string, campaignID, caseID int64) error {
@@ -237,10 +277,55 @@ func main() {
 	callbackSch := callback.NewScheduler(callbackRepo, callSvc, outboundSvc, logger)
 	screenPopSvc := screenpop.NewService(screenPopConfigRepo, customerSvc)
 	webhookSvc := webhook.NewService(webhookConfigRepo, webhookLogRepo, logger)
-	lifecycleSvc := lifecycle.NewService(callSvc, agentPresenceSvc, csatSvc, webhookSvc, customerSvc, screenPopSvc, recordingRepo, eslClient)
+	lifecycleSvc := lifecycle.NewService(callSvc, agentPresenceSvc, csatSvc, webhookSvc, customerSvc, screenPopSvc, recordingRepo, eslClient, logger)
 	imRouterSvc := imrouter.NewService(imSvc, agentPresenceSvc, skillGroupSvc, logger)
+
+	// Bridge IM → CRM: record an interaction when an IM session closes.
+	imSvc.OnSessionClose(func(ctx context.Context, sess *im.IMSession) {
+		if sess.CustomerID == nil {
+			return
+		}
+		_ = customerSvc.RecordInteraction(ctx, crm.RecordInteractionInput{
+			CustomerID: *sess.CustomerID,
+			TenantID:   sess.TenantID,
+			Channel:    "im",
+			Direction:  "inbound",
+			Summary:    "IM session via channel " + fmt.Sprintf("%d", sess.ChannelID),
+		})
+	})
+	// Bridge IM → Webhook: fire im.session.closed event.
+	imSvc.OnSessionClose(func(ctx context.Context, sess *im.IMSession) {
+		webhookSvc.Deliver(ctx, webhook.Event{
+			TenantID:  sess.TenantID,
+			Type:      "im.session.closed",
+			Payload:   sess,
+			Timestamp: time.Now(),
+		})
+	})
+
+	// Bridge Agent Presence → Webhook: fire agent.status_changed event.
+	agentPresenceSvc.OnPresenceChange(func(ctx context.Context, p *identity.AgentPresence, oldStatus identity.AgentPresenceStatus) {
+		webhookSvc.Deliver(ctx, webhook.Event{
+			TenantID:  p.TenantID,
+			Type:      "agent.status_changed",
+			Payload:   map[string]interface{}{"agent_id": p.AgentID, "old_status": oldStatus, "new_status": p.Status},
+			Timestamp: time.Now(),
+		})
+	})
+
+	// Auto-ticket: CSAT low score → complaint ticket.
+	tcAdapter := ticketCreatorAdapter{tickets: ticketSvc}
+	csatSvc.SetTicketCreator(tcAdapter, 2)
+	// Auto-ticket: repeat caller → escalation ticket.
+	lifecycleSvc.SetTicketCreator(tcAdapter)
+	lifecycleSvc.SetRepeatCallDetector(repeatCallDetectorAdapter{rdb: redisClient}, 3)
+
+	// Dialer: per-phone daily frequency limit (max 3 calls/day/number, MIIT compliance).
+	dialerSvc.SetFrequencyChecker(dialer.NewRedisFrequencyChecker(redisClient), 3)
+
 	trunkMonitor := trunk.NewHealthMonitor(sipTrunkRepo, trunkHealthSvc, logger, eslClient)
 	emailSvc := email.NewService(imSvc, logger)
+	emailSvc.SetRouter(imRouterSvc)
 
 	// IVR Engine: create engine with all node handlers for flow execution.
 	ivrFlowLoader := func(ctx context.Context, flowID int64) (*routing.FlowGraph, error) {
@@ -263,6 +348,7 @@ func main() {
 		Calls:      callRepo,
 		Logger:     logger,
 	})
+	acdSvc.SetAgentLookup(agentRepo)
 	// Familiar-customer affinity: lifecycle.EndCall records who served each
 	// inbound caller; ACD reads this cache on dispatch for routing_policy=familiar.
 	lifecycleSvc.SetFamiliarRecorder(acdSvc, func(tenantID int64) int {
@@ -273,6 +359,11 @@ func main() {
 	})
 	ivrEngine := ivr.DefaultEngine(eslClient, ivrFlowLoader, acdSvc)
 	lifecycleSvc.SetIVREngine(ivrEngine)
+	// IVR context: persist DTMFs/captured vars so the agent screen pop shows
+	// the caller's pre-transfer journey.
+	ivrContextStore := infraRedis.NewIVRContextStore(redisClient)
+	ivrEngine.SetIVRContextSink(ivrContextStore)
+	screenPopSvc.SetIVRContextLoader(ivrContextStore)
 	// LLM Provider: use DashScope when API key configured, otherwise fallback to stub.
 	var llmProvider llm.Provider
 	if cfg.Aliyun.DashScopeAPIKey != "" {
@@ -323,9 +414,13 @@ func main() {
 		go runNLSRefresher(cfg.Aliyun.AccessKeyID, cfg.Aliyun.AccessKeySecret, nlsExpireSec, aliyunASR, aliyunTTS, logger)
 	}
 
+	// hubCtx drives all background goroutines; cancelled on SIGTERM.
+	hubCtx, hubCancel := context.WithCancel(context.Background())
+
 	// NATS event publisher (best-effort): publishes ccc.call.* and ccc.agent.*
 	// to JetStream so downstream consumers (analytics, BI, third-party CRM
 	// hooks) can subscribe without polling the DB.
+	var postCallWorker *postcall.Worker
 	if cfg.NATS.URL != "" {
 		natsClient, err := infraNATS.NewClient(infraNATS.Config{URL: cfg.NATS.URL, Logger: logger})
 		if err != nil {
@@ -337,9 +432,28 @@ func main() {
 			lifecycleSvc.SetEventPublisher(natsClient)
 			defer natsClient.Close()
 			logger.Info().Str("url", cfg.NATS.URL).Str("stream", cfg.NATS.Stream).Msg("nats: event publisher wired")
+
+			// Start NATS consumer for post-call processing (CDR aggregation, QA auto-trigger).
+			cdrRepo := postcall.NewMySQLCDRRepo(db)
+			postCallWorker = postcall.NewWorker(callRepo, cdrRepo, logger)
+			natsConsumer := infraNATS.NewConsumer(natsClient, postCallWorker.HandleMessage)
+			go func() {
+				if err := natsConsumer.Subscribe(hubCtx, cfg.NATS.Stream, "postcall-worker", "ccc.call.>"); err != nil {
+					logger.Error().Err(err).Msg("nats: postcall consumer stopped")
+				}
+			}()
+			logger.Info().Msg("nats: postcall consumer started")
+
+			// Daily CDR reconciler: backfills any rows the NATS path missed.
+			reconciler := postcall.NewReconciler(db, logger)
+			go reconciler.Run(hubCtx, 2)
 		}
 	} else {
 		logger.Warn().Msg("nats: NATS_URL not set, event publishing disabled")
+		// Even without NATS, run the reconciler so daily_cdr_summary stays
+		// up to date from the calls table.
+		reconciler := postcall.NewReconciler(db, logger)
+		go reconciler.Run(hubCtx, 2)
 	}
 
 	// --- Phase 9 Repositories ---
@@ -363,6 +477,13 @@ func main() {
 	// Set LLM provider on digital employee service for fallback intent matching.
 	digitalEmployeeSvc.SetLLMProvider(llmProvider)
 
+	// Wire QA auto-trigger: post-call NATS worker fires AutoInspect on every answered call.
+	if postCallWorker != nil {
+		postCallWorker.SetQAAutoTrigger(qiSvc)
+	}
+	// Also wire lifecycle-path auto-trigger as a backup for deployments without NATS.
+	lifecycleSvc.SetQAAutoTrigger(qiSvc)
+
 	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
 
@@ -376,6 +497,7 @@ func main() {
 	sipTrunkHandler := handler.NewSIPTrunkHandler(sipTrunkRepo)
 	phoneNumberHandler := handler.NewPhoneNumberHandler(phoneNumberRepo)
 	recordingHandler := handler.NewRecordingHandler(recordingRepo)
+	recordingHandler.SetAccessLogger(infraMySQL.NewRecordingAccessLogger(auditLogRepo))
 	if cfg.Storage.Endpoint != "" {
 		store, err := storage.NewMinIOClient(storage.Config{
 			Endpoint:  cfg.Storage.Endpoint,
@@ -418,7 +540,7 @@ func main() {
 	b2bHandler := handler.NewB2BHandler(b2bSvc)
 	trunkGroupHandler := handler.NewTrunkGroupHandler(trunkGroupRepo)
 	customerHandler := handler.NewCustomerHandler(customerSvc)
-	ticketHandler := handler.NewTicketHandler(ticketSvc, ticketTemplateSvc)
+	ticketHandler := handler.NewTicketHandler(ticketSvc, ticketTemplateSvc, logger)
 	knowledgeHandler := handler.NewKnowledgeHandler(knowledgeSvc)
 	agentScriptHandler := handler.NewAgentScriptHandler(agentScriptSvc)
 	sessionInfoHandler := handler.NewSessionInfoHandler(sessionInfoSvc)
@@ -451,7 +573,7 @@ func main() {
 
 	// Phone Component Extra Handlers
 	supervisorHandler := handler.NewSupervisorHandler(callSvc)
-	screenPopHandler := handler.NewScreenPopHandler(customerSvc)
+	screenPopHandler := handler.NewScreenPopHandler(customerSvc, screenPopSvc, callSvc)
 	previewCaseHandler := handler.NewPreviewCaseHandler(campaignSvc, dialerSvc)
 
 	// Auth Handler
@@ -462,6 +584,10 @@ func main() {
 	imHub := imhub.NewHub(imSvc, logger)
 	agentHub := agenthub.NewHub(logger)
 	transcriptHub := transcripthub.NewHub(logger)
+	transcriptHub.SetSensitiveWords([]string{"投诉", "工信部", "315", "律师", "法院", "退款", "赔偿", "骗子"})
+	transcriptHub.OnAlert(func(ctx context.Context, callID int64, keyword, text string) {
+		logger.Error().Int64("call_id", callID).Str("keyword", keyword).Msg("realtime_qa: supervisor alert — sensitive word in live call")
+	})
 
 	// Phase 10 Repositories
 	annotationTaskRepo := infraMySQL.NewAnnotationTaskRepo(db)
@@ -634,29 +760,57 @@ func main() {
 		Logger:                 logger,
 	})
 
+	// Wire JWT secret for WebSocket JWT auth.
+	agentHub.SetJWTSecret(cfg.JWT.Secret)
+
+	// Wire concurrency guard for per-tenant call limits.
+	concurrencyGuard := infraRedis.NewConcurrencyGuard(redisClient)
+	lifecycleSvc.SetConcurrencyGuard(concurrencyGuard, &tenantSettingsAdapter{repo: tenantSettingsRepo})
+
+	// Wire recording announce lookup.
+	lifecycleSvc.SetRecordingAnnounceLookup(func(ctx context.Context, tenantID int64) bool {
+		if ts, err := tenantSettingsRepo.GetByTenantID(ctx, tenantID); err == nil && ts != nil {
+			return ts.RecordingAnnounce
+		}
+		return false
+	})
+
 	// Wire lifecycle → agentHub for real-time agent notifications
 	lifecycleSvc.SetAgentNotifier(agentHub)
 	lifecycleSvc.SetCampaignService(campaignSvc)
 	lifecycleSvc.SetQueueSnapshotRepo(queueSnapshotRepo)
 
+	// Start dashboard refresher (aggregates DB data into Redis every 10s)
+	dashRefresher := dashboard.NewRefresher(callRepo, agentPresenceRepo, tenantRepo, dashboardRepo, logger)
+	dashRefresher.SetAlarmNotifier(dashboard.NewLogAlarmNotifier(logger))
+
 	// Start WebSocket hub goroutines
-	hubCtx, hubCancel := context.WithCancel(context.Background())
+	go dashRefresher.Start(hubCtx)
 	go dashboardHub.StartBroadcast(hubCtx)
 	go imHub.StartBroadcast(hubCtx)
 	go agentHub.StartBroadcast(hubCtx)
 	go transcriptHub.StartBroadcast(hubCtx)
 
 	// Start callback scheduler (processes pending callbacks every 30s)
+	go callbackSch.Run(hubCtx, time.Duration(cfg.Tuning.CallbackIntervalSec)*time.Second)
+
+	// Ghost agent auto-reset: scan agents stuck in talking/dialing for over 4 hours.
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(time.Duration(cfg.Tuning.GhostAgentCheckSec) * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-hubCtx.Done():
 				return
 			case <-ticker.C:
-				if n, err := callbackSch.ProcessAllPending(hubCtx); err == nil && n > 0 {
-					logger.Info().Int("processed", n).Msg("callback scheduler: processed pending callbacks")
+				tenants, _, err := tenantRepo.List(hubCtx, 0, 1000)
+				if err != nil {
+					continue
+				}
+				for _, t := range tenants {
+					if n, err := agentPresenceSvc.ResetGhostAgents(hubCtx, t.ID, 4*time.Hour); err == nil && n > 0 {
+						logger.Warn().Int("reset", n).Int64("tenant_id", t.ID).Msg("ghost agent auto-reset")
+					}
 				}
 			}
 		}
@@ -670,6 +824,8 @@ func main() {
 	// Wire IM hub for real-time broadcast of REST-posted messages.
 	imSessionHandler.SetBroadcaster(imHub)
 	widgetHandler.SetBroadcaster(imHub)
+	// Widget creates sessions; immediately try auto-routing to an idle agent in the skill group.
+	widgetHandler.SetAutoRouter(imRouterSvc)
 
 	// ACD dispatcher: pull queued calls and assign them to idle agents.
 	go acdSvc.Run(hubCtx)
@@ -684,11 +840,22 @@ func main() {
 			Logger:   logger,
 		}, lifecycleSvc)
 		go listener.Run(hubCtx)
+		go eslClient.StartHealthCheck(hubCtx)
 		logger.Info().Msg("ESL event listener started")
 	}
 
 	addr := fmt.Sprintf(":%s", cfg.Server.Port)
-	srv := &http.Server{Addr: addr, Handler: router}
+	// Server-level timeouts guard against Slowloris / resource exhaustion.
+	// WriteTimeout is the largest because CSV exports and recording streams
+	// legitimately produce long responses.
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           router,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 
 	go func() {
 		logger.Info().Str("addr", addr).Msg("starting CCC server")
@@ -701,8 +868,19 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info().Msg("shutting down server...")
+
+	// Phase 1: stop accepting new traffic
+	handler.SetReady(false)
+	logger.Info().Msg("readiness probe disabled, draining connections...")
+
+	// Phase 2: stop background tasks
 	hubCancel()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	// Phase 3: drain period for load balancers to detect unavailability
+	time.Sleep(time.Duration(cfg.Tuning.ShutdownDrainSec) * time.Second)
+
+	// Phase 4: wait for in-flight requests to complete
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Tuning.ShutdownTimeoutSec)*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error().Err(err).Msg("server shutdown error")
@@ -710,9 +888,72 @@ func main() {
 	logger.Info().Msg("server stopped")
 }
 
-// runNLSRefresher polls Aliyun NLS for a fresh token before the current one
-// expires, then atomically swaps it onto the ASR/TTS providers. Aliyun's REST
-// returns expireTime in seconds; we refresh ~5 min before. On failure we
+// tenantSettingsAdapter wraps the TenantSettingsRepository to satisfy the
+// lifecycle.TenantSettingsLookup interface.
+type tenantSettingsAdapter struct {
+	repo identity.TenantSettingsRepository
+}
+
+func (a *tenantSettingsAdapter) GetByTenantID(ctx context.Context, tenantID int64) (maxConcurrentCalls int) {
+	ts, err := a.repo.GetByTenantID(ctx, tenantID)
+	if err != nil || ts == nil {
+		return 0
+	}
+	return ts.MaxConcurrentCalls
+}
+
+// csatSMSAdapter bridges appSms.Service → csat.SMSSender.
+type csatSMSAdapter struct{ sms *appSms.Service }
+
+func (a csatSMSAdapter) Send(ctx context.Context, tenantID int64, phone, templateCode string, params map[string]string) error {
+	return a.sms.Send(ctx, appSms.SendRequest{
+		TenantID:     tenantID,
+		Phone:        phone,
+		TemplateCode: templateCode,
+		Params:       params,
+	})
+}
+
+// csatCallerAdapter resolves a caller phone from the calls table.
+type csatCallerAdapter struct{ calls call.CallRepository }
+
+func (a csatCallerAdapter) GetByID(ctx context.Context, id int64) (string, error) {
+	c, err := a.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return "", err
+	}
+	return c.Caller, nil
+}
+
+// ticketCreatorAdapter bridges ticket.TicketService → csat.TicketCreator / lifecycle.TicketCreator.
+type ticketCreatorAdapter struct{ tickets *ticket.TicketService }
+
+func (a ticketCreatorAdapter) CreateAutoTicket(ctx context.Context, tenantID int64, title, description, priority string, callID *int64) error {
+	_, err := a.tickets.Create(ctx, ticket.CreateTicketInput{
+		TenantID:    tenantID,
+		Title:       title,
+		Description: description,
+		Priority:    priority,
+		CallID:      callID,
+	})
+	return err
+}
+
+// repeatCallDetectorAdapter uses Redis INCR to count daily calls per caller.
+type repeatCallDetectorAdapter struct{ rdb *redis.Client }
+
+func (a repeatCallDetectorAdapter) IncrAndGet(ctx context.Context, tenantID int64, caller string) (int, error) {
+	key := fmt.Sprintf("repeat_call:%d:%s:%s", tenantID, caller, time.Now().Format("20060102"))
+	count, err := a.rdb.Incr(ctx, key).Result()
+	if err != nil {
+		return 0, err
+	}
+	if count == 1 {
+		a.rdb.Expire(ctx, key, 25*time.Hour)
+	}
+	return int(count), nil
+}
+
 // retry every 5 minutes with the previous (still valid) token until success.
 func runNLSRefresher(accessKeyID, accessKeySecret string, expireSec int64, asr *llm.AliyunASRProvider, tts *llm.AliyunTTSProvider, logger zerolog.Logger) {
 	nextDelay := func(expSec int64) time.Duration {

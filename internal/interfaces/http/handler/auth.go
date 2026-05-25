@@ -14,6 +14,7 @@ import (
 )
 
 type UserFinder interface {
+	GetByID(ctx context.Context, id int64) (*identity.User, error)
 	FindByUsernameGlobal(ctx context.Context, username string) (*identity.User, error)
 }
 
@@ -24,6 +25,36 @@ type AuthHandler struct {
 
 func NewAuthHandler(finder UserFinder, jwtSecret string) *AuthHandler {
 	return &AuthHandler{finder: finder, jwtSecret: jwtSecret}
+}
+
+func (h *AuthHandler) issueTokens(user *identity.User) (accessToken, refreshToken string, err error) {
+	now := time.Now()
+	accessClaims := jwt.MapClaims{
+		"sub":       fmt.Sprintf("%d", user.ID),
+		"tenant_id": user.TenantID,
+		"user_id":   user.ID,
+		"role":      string(user.Role),
+		"type":      "access",
+		"iat":       now.Unix(),
+		"exp":       now.Add(15 * time.Minute).Unix(),
+	}
+	at := jwt.NewWithClaims(jwt.SigningMethodHS256, accessClaims)
+	accessToken, err = at.SignedString([]byte(h.jwtSecret))
+	if err != nil {
+		return
+	}
+
+	refreshClaims := jwt.MapClaims{
+		"sub":       fmt.Sprintf("%d", user.ID),
+		"tenant_id": user.TenantID,
+		"user_id":   user.ID,
+		"type":      "refresh",
+		"iat":       now.Unix(),
+		"exp":       now.Add(7 * 24 * time.Hour).Unix(),
+	}
+	rt := jwt.NewWithClaims(jwt.SigningMethodHS256, refreshClaims)
+	refreshToken, err = rt.SignedString([]byte(h.jwtSecret))
+	return
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -56,29 +87,74 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
-	claims := jwt.MapClaims{
-		"sub":       fmt.Sprintf("%d", user.ID),
-		"tenant_id": user.TenantID,
-		"user_id":   user.ID,
-		"role":      string(user.Role),
-		"iat":       now.Unix(),
-		"exp":       now.Add(24 * time.Hour).Unix(),
-	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenStr, err := token.SignedString([]byte(h.jwtSecret))
+	accessToken, refreshToken, err := h.issueTokens(user)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 
 	response.JSON(w, http.StatusOK, map[string]interface{}{
-		"token": tokenStr,
+		"token":         accessToken,
+		"refresh_token": refreshToken,
 		"user": map[string]interface{}{
 			"id":       user.ID,
 			"username": user.Username,
 			"role":     user.Role,
 			"tenantId": user.TenantID,
 		},
+	})
+}
+
+// RefreshToken validates a refresh token and issues new access + refresh tokens.
+func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		response.Error(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if in.RefreshToken == "" {
+		response.Error(w, http.StatusBadRequest, "refresh_token required")
+		return
+	}
+
+	token, err := jwt.Parse(in.RefreshToken, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method")
+		}
+		return []byte(h.jwtSecret), nil
+	})
+	if err != nil || !token.Valid {
+		response.Error(w, http.StatusUnauthorized, "invalid or expired refresh token")
+		return
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		response.Error(w, http.StatusUnauthorized, "invalid token claims")
+		return
+	}
+	if claims["type"] != "refresh" {
+		response.Error(w, http.StatusUnauthorized, "not a refresh token")
+		return
+	}
+
+	userID, _ := claims["user_id"].(float64)
+	user, err := h.finder.GetByID(r.Context(), int64(userID))
+	if err != nil || user == nil {
+		response.Error(w, http.StatusUnauthorized, "user not found")
+		return
+	}
+
+	accessToken, refreshToken, err := h.issueTokens(user)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	response.JSON(w, http.StatusOK, map[string]interface{}{
+		"token":         accessToken,
+		"refresh_token": refreshToken,
 	})
 }

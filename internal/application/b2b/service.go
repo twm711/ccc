@@ -42,10 +42,12 @@ func (s *Service) Back2BackCall(ctx context.Context, tenantID int64, callerNumbe
 		return nil, err
 	}
 
-	_ = s.events.Create(ctx, &call.CallEvent{
+	if err := s.events.Create(ctx, &call.CallEvent{
 		ID: snowflake.NextID(), CallID: c.ID, TenantID: tenantID,
 		Event: "b2b_initiated", Detail: callerNumber + "->" + calleeNumber, CreatedAt: now,
-	})
+	}); err != nil {
+		s.logger.Warn().Err(err).Int64("call_id", c.ID).Msg("failed to log b2b_initiated event")
+	}
 
 	// Originate B2B call via ESL
 	if s.esl != nil && gateway != "" {
@@ -93,10 +95,12 @@ func (s *Service) EncryptedCall(ctx context.Context, tenantID int64, callerNumbe
 		return nil, err
 	}
 
-	_ = s.events.Create(ctx, &call.CallEvent{
+	if err := s.events.Create(ctx, &call.CallEvent{
 		ID: snowflake.NextID(), CallID: c.ID, TenantID: tenantID,
 		Event: "encrypted_call", Detail: "intermediate:" + intermediateNumber, CreatedAt: now,
-	})
+	}); err != nil {
+		s.logger.Warn().Err(err).Int64("call_id", c.ID).Msg("failed to log encrypted_call event")
+	}
 
 	// Originate encrypted call via ESL with number masking
 	if s.esl != nil && intermediateNumber != "" {

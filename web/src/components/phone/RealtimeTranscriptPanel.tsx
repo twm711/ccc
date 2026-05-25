@@ -25,6 +25,10 @@ export default function RealtimeTranscriptPanel({ callId }: { callId?: number })
   const bottomRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
+  const stoppedRef = useRef(false);
+  const backoffRef = useRef(1000);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const connectWS = useCallback(() => {
     if (!callId) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -33,6 +37,7 @@ export default function RealtimeTranscriptPanel({ callId }: { callId?: number })
 
     ws.onopen = () => {
       setConnected(true);
+      backoffRef.current = 1000;
       setLines([{
         id: 'sys-connected',
         role: 'system',
@@ -59,21 +64,27 @@ export default function RealtimeTranscriptPanel({ callId }: { callId?: number })
       }
     };
 
-    ws.onclose = () => {
+    const scheduleReconnect = () => {
       setConnected(false);
+      if (stoppedRef.current) return;
+      reconnectTimerRef.current = setTimeout(() => {
+        backoffRef.current = Math.min(backoffRef.current * 2, 30000);
+        connectWS();
+      }, backoffRef.current);
     };
-
-    ws.onerror = () => {
-      setConnected(false);
-    };
+    ws.onclose = scheduleReconnect;
+    ws.onerror = () => { try { ws.close(); } catch { /* ignore */ } };
 
     wsRef.current = ws;
   }, [callId]);
 
   useEffect(() => {
+    stoppedRef.current = false;
     connectWS();
     return () => {
-      wsRef.current?.close();
+      stoppedRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      try { wsRef.current?.close(); } catch { /* ignore */ }
     };
   }, [connectWS]);
 

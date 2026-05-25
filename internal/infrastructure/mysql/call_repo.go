@@ -19,13 +19,13 @@ func NewCallRepo(db *sqlx.DB) *CallRepo {
 func (r *CallRepo) Create(ctx context.Context, c *call.Call) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO calls (id, tenant_id, channel_uuid, direction, call_type, media_type, caller, callee, masked_callee,
-		 agent_user_id, skill_group_id, ivr_flow_id, phone_number_id, carrier_id, parent_call_id, campaign_case_id,
+		 agent_user_id, skill_group_id, ivr_flow_id, phone_number_id, carrier_id, parent_call_id, campaign_case_id, customer_id,
 		 status, hangup_reason, disposition_code, hold_count, transfer_count, satisfaction_rating,
 		 ivr_duration_sec, ring_duration_sec, queue_duration_sec, wait_duration_sec, duration_sec,
 		 recording_url, custom_data, started_at, answered_at, ended_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.TenantID, c.ChannelUUID, c.Direction, c.CallType, c.MediaType, c.Caller, c.Callee, c.MaskedCallee,
-		c.AgentUserID, c.SkillGroupID, c.IVRFlowID, c.PhoneNumberID, c.CarrierID, c.ParentCallID, c.CampaignCaseID,
+		c.AgentUserID, c.SkillGroupID, c.IVRFlowID, c.PhoneNumberID, c.CarrierID, c.ParentCallID, c.CampaignCaseID, c.CustomerID,
 		c.Status, c.HangupReason, c.DispositionCode, c.HoldCount, c.TransferCount, c.SatisfactionRating,
 		c.IVRDurationSec, c.RingDurationSec, c.QueueDurationSec, c.WaitDurationSec, c.DurationSec,
 		c.RecordingURL, c.CustomData, c.StartedAt, c.AnsweredAt, c.EndedAt)
@@ -52,14 +52,14 @@ func (r *CallRepo) GetByID(ctx context.Context, id int64) (*call.Call, error) {
 
 func (r *CallRepo) Update(ctx context.Context, c *call.Call) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE calls SET status=?, hangup_reason=?, disposition_code=?, agent_user_id=?, skill_group_id=?,
+		`UPDATE calls SET status=?, hangup_reason=?, disposition_code=?, agent_user_id=?, skill_group_id=?, customer_id=?,
 		 hold_count=?, transfer_count=?, satisfaction_rating=?,
 		 ivr_duration_sec=?, ring_duration_sec=?, queue_duration_sec=?, wait_duration_sec=?, duration_sec=?,
-		 recording_url=?, answered_at=?, ended_at=? WHERE id=?`,
-		c.Status, c.HangupReason, c.DispositionCode, c.AgentUserID, c.SkillGroupID,
+		 recording_url=?, custom_data=?, answered_at=?, ended_at=? WHERE id=?`,
+		c.Status, c.HangupReason, c.DispositionCode, c.AgentUserID, c.SkillGroupID, c.CustomerID,
 		c.HoldCount, c.TransferCount, c.SatisfactionRating,
 		c.IVRDurationSec, c.RingDurationSec, c.QueueDurationSec, c.WaitDurationSec, c.DurationSec,
-		c.RecordingURL, c.AnsweredAt, c.EndedAt, c.ID)
+		c.RecordingURL, c.CustomData, c.AnsweredAt, c.EndedAt, c.ID)
 	return err
 }
 
@@ -112,6 +112,84 @@ func (r *CallRepo) ListWithFilter(ctx context.Context, tenantID int64, filter ca
 	err := r.db.SelectContext(ctx, &calls,
 		"SELECT * FROM calls "+where+" ORDER BY started_at DESC LIMIT ? OFFSET ?", queryArgs...)
 	return calls, total, err
+}
+
+// ListWithCursor uses keyset pagination (WHERE id < cursor) for efficient deep paging.
+func (r *CallRepo) ListWithCursor(ctx context.Context, tenantID int64, filter call.CallListFilter, cursor int64, limit int) ([]*call.Call, error) {
+	where := "WHERE tenant_id = ?"
+	args := []interface{}{tenantID}
+
+	if cursor > 0 {
+		where += " AND id < ?"
+		args = append(args, cursor)
+	}
+	if filter.Direction != nil {
+		where += " AND direction = ?"
+		args = append(args, *filter.Direction)
+	}
+	if filter.CallType != nil {
+		where += " AND call_type = ?"
+		args = append(args, *filter.CallType)
+	}
+	if filter.MediaType != nil {
+		where += " AND media_type = ?"
+		args = append(args, *filter.MediaType)
+	}
+	if filter.Status != nil {
+		where += " AND status = ?"
+		args = append(args, *filter.Status)
+	}
+	if filter.Caller != "" {
+		where += " AND caller LIKE ?"
+		args = append(args, "%"+filter.Caller+"%")
+	}
+	if filter.Callee != "" {
+		where += " AND callee LIKE ?"
+		args = append(args, "%"+filter.Callee+"%")
+	}
+	if filter.StartFrom != nil {
+		where += " AND started_at >= ?"
+		args = append(args, *filter.StartFrom)
+	}
+	if filter.StartTo != nil {
+		where += " AND started_at <= ?"
+		args = append(args, *filter.StartTo)
+	}
+
+	args = append(args, limit)
+	var calls []*call.Call
+	err := r.db.SelectContext(ctx, &calls,
+		"SELECT * FROM calls "+where+" ORDER BY id DESC LIMIT ?", args...)
+	return calls, err
+}
+
+func (r *CallRepo) CountTodayByTenant(ctx context.Context, tenantID int64) (total, inbound, outbound, answered, abandoned, active, queued int, err error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT
+			COUNT(*) AS total,
+			SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) AS inbound,
+			SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) AS outbound,
+			SUM(CASE WHEN answered_at IS NOT NULL THEN 1 ELSE 0 END) AS answered,
+			SUM(CASE WHEN hangup_reason='abandon' THEN 1 ELSE 0 END) AS abandoned,
+			SUM(CASE WHEN status IN ('active','ringing') THEN 1 ELSE 0 END) AS active,
+			SUM(CASE WHEN status='queue' THEN 1 ELSE 0 END) AS queued
+		 FROM calls
+		 WHERE tenant_id = ? AND started_at >= CURDATE()`, tenantID)
+	err = row.Scan(&total, &inbound, &outbound, &answered, &abandoned, &active, &queued)
+	return
+}
+
+func (r *CallRepo) SLATodayByTenant(ctx context.Context, tenantID int64) (avgWaitSec float64, answeredWithin20s int, totalOffered int, longestWaitSec int, err error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT
+			COALESCE(AVG(queue_duration_sec), 0) AS avg_wait_sec,
+			SUM(CASE WHEN answered_at IS NOT NULL AND queue_duration_sec <= 20 THEN 1 ELSE 0 END) AS answered_within_20s,
+			SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) AS total_offered,
+			COALESCE(MAX(CASE WHEN status='queue' THEN queue_duration_sec ELSE 0 END), 0) AS longest_wait_sec
+		 FROM calls
+		 WHERE tenant_id = ? AND started_at >= CURDATE()`, tenantID)
+	err = row.Scan(&avgWaitSec, &answeredWithin20s, &totalOffered, &longestWaitSec)
+	return
 }
 
 // CallEventRepo

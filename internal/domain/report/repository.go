@@ -5,6 +5,7 @@ import "context"
 // DashboardRepository provides real-time metrics.
 type DashboardRepository interface {
 	GetOverview(ctx context.Context, tenantID int64) (*DashboardOverview, error)
+	UpdateOverview(ctx context.Context, o *DashboardOverview) error
 	GetCallFunnel(ctx context.Context, tenantID int64) (*CallFunnel, error)
 	GetCallTrend(ctx context.Context, tenantID int64, intervalMin int) ([]*CallTrend, error)
 	GetAgentStatusList(ctx context.Context, tenantID int64) ([]*AgentStatusSummary, error)

@@ -7,17 +7,21 @@ import (
 
 	"github.com/divord97/ccc/internal/domain/ticket"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/bizlog"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 )
 
 type TicketHandler struct {
 	svc     *ticket.TicketService
 	tmplSvc *ticket.TicketTemplateService
+	logger  zerolog.Logger
 }
 
-func NewTicketHandler(svc *ticket.TicketService, tmplSvc *ticket.TicketTemplateService) *TicketHandler {
-	return &TicketHandler{svc: svc, tmplSvc: tmplSvc}
+func NewTicketHandler(svc *ticket.TicketService, tmplSvc *ticket.TicketTemplateService, logger zerolog.Logger) *TicketHandler {
+	return &TicketHandler{svc: svc, tmplSvc: tmplSvc, logger: logger}
 }
 
 func (h *TicketHandler) CreateCategory(w http.ResponseWriter, r *http.Request) {
@@ -141,27 +145,45 @@ func (h *TicketHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if in.TenantID == 0 {
+		in.TenantID = middleware.TenantIDFromCtx(r.Context())
+	}
 	tk, err := h.svc.Create(r.Context(), in)
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	bizlog.TicketEvent(h.logger, tk.TenantID, tk.ID, "ticket.created").
+		Str("priority", tk.Priority).Msg("ticket created")
 	response.JSON(w, http.StatusCreated, tk)
 }
 
 func (h *TicketHandler) ListTickets(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 	items, err := h.svc.List(r.Context(), tenantID, offset, limit)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]interface{}{"items": items})
+}
+
+func (h *TicketHandler) ListByCall(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	callID, _ := strconv.ParseInt(chi.URLParam(r, "callId"), 10, 64)
+	items, err := h.svc.ListByCallID(r.Context(), callID)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	scoped := items[:0]
+	for _, t := range items {
+		if t.TenantID == tenantID {
+			scoped = append(scoped, t)
+		}
+	}
+	response.JSON(w, http.StatusOK, map[string]interface{}{"items": scoped})
 }
 
 func (h *TicketHandler) GetTicket(w http.ResponseWriter, r *http.Request) {
@@ -221,6 +243,8 @@ func (h *TicketHandler) AssignTicket(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	bizlog.TicketEvent(h.logger, tk.TenantID, tk.ID, "ticket.assigned").
+		Int64("assignee_id", in.AgentID).Msg("ticket assigned")
 	response.JSON(w, http.StatusOK, tk)
 }
 
@@ -238,5 +262,7 @@ func (h *TicketHandler) AddComment(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	bizlog.TicketEvent(h.logger, middleware.TenantIDFromCtx(r.Context()), id, "ticket.comment_added").
+		Int64("author_id", in.AuthorID).Msg("ticket comment added")
 	response.JSON(w, http.StatusCreated, map[string]string{"status": "ok"})
 }

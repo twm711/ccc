@@ -1,8 +1,11 @@
 package acd
 
 import (
+	"context"
 	"testing"
 	"time"
+
+	"github.com/divord97/ccc/internal/domain/identity"
 )
 
 func TestMemberRoundTrip(t *testing.T) {
@@ -61,4 +64,68 @@ func TestExpireWindowMath(t *testing.T) {
 		t.Fatalf("parseMember returned ms=%d, want close to now=%d (delta=%d)",
 			ms, now.UnixMilli(), delta)
 	}
+}
+
+func TestScoreFor_HigherPriorityFirst(t *testing.T) {
+	ts := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	highPrio := scoreFor(10, ts)
+	lowPrio := scoreFor(1, ts)
+	if highPrio >= lowPrio {
+		t.Errorf("higher priority should produce lower score: scoreFor(10)=%f >= scoreFor(1)=%f", highPrio, lowPrio)
+	}
+}
+
+func TestScoreFor_OlderTimestampFirst(t *testing.T) {
+	older := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	newer := older.Add(10 * time.Second)
+	s1 := scoreFor(5, older)
+	s2 := scoreFor(5, newer)
+	if s1 >= s2 {
+		t.Errorf("older timestamp should produce lower score at same priority: %f >= %f", s1, s2)
+	}
+}
+
+func TestFamiliarKey(t *testing.T) {
+	k := familiarKey(42, "13800138000")
+	if k != lastAgentPrefix+"42:13800138000" {
+		t.Errorf("unexpected key: %s", k)
+	}
+}
+
+func TestQueueKey(t *testing.T) {
+	k := queueKey(99)
+	if k != queueKeyPrefix+"99" {
+		t.Errorf("unexpected key: %s", k)
+	}
+}
+
+func TestAgentWorkloadSummary_Utilization(t *testing.T) {
+	caps := []identity.MediaCapacity{
+		{Media: identity.MediaTypeVoice, MaxSlots: 1, ActiveSlots: 1},
+		{Media: identity.MediaTypeChat, MaxSlots: 5, ActiveSlots: 2},
+		{Media: identity.MediaTypeEmail, MaxSlots: 10, ActiveSlots: 0},
+	}
+	var totalActive, totalMax int
+	for _, c := range caps {
+		totalActive += c.ActiveSlots
+		totalMax += c.MaxSlots
+	}
+	util := float64(totalActive) / float64(totalMax) * 100
+	summary := &AgentWorkloadSummary{
+		AgentID:     1,
+		Capacities:  caps,
+		TotalActive: totalActive,
+		TotalMax:    totalMax,
+		Utilization: util,
+	}
+	if summary.TotalActive != 3 {
+		t.Errorf("TotalActive = %d, want 3", summary.TotalActive)
+	}
+	if summary.TotalMax != 16 {
+		t.Errorf("TotalMax = %d, want 16", summary.TotalMax)
+	}
+	if summary.Utilization < 18 || summary.Utilization > 19 {
+		t.Errorf("Utilization = %f, want ~18.75", summary.Utilization)
+	}
+	_ = context.Background() // use context import
 }

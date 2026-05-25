@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/report"
+	"github.com/divord97/ccc/pkg/wsutil"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -16,7 +17,7 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     wsutil.CheckOrigin(),
 }
 
 // Hub manages WebSocket connections and broadcasts dashboard updates.
@@ -69,29 +70,37 @@ func (h *Hub) StartBroadcast(ctx context.Context) {
 }
 
 func (h *Hub) broadcastAll(ctx context.Context) {
+	// Snapshot tenant IDs under the lock, then release before DB queries.
 	h.mu.RLock()
-	defer h.mu.RUnlock()
+	tenantIDs := make(map[int64]struct{})
+	for c := range h.clients {
+		tenantIDs[c.TenantID] = struct{}{}
+	}
+	h.mu.RUnlock()
 
-	tenantData := make(map[int64][]byte)
+	tenantData := make(map[int64][]byte, len(tenantIDs))
+	for tid := range tenantIDs {
+		overview, err := h.dashSvc.GetOverview(ctx, tid)
+		if err != nil {
+			h.logger.Error().Err(err).Int64("tenant_id", tid).Msg("dashboard broadcast failed")
+			continue
+		}
+		tenantData[tid], _ = json.Marshal(overview)
+	}
 
+	h.mu.RLock()
 	for c := range h.clients {
 		data, ok := tenantData[c.TenantID]
 		if !ok {
-			overview, err := h.dashSvc.GetOverview(ctx, c.TenantID)
-			if err != nil {
-				h.logger.Error().Err(err).Int64("tenant_id", c.TenantID).Msg("dashboard broadcast failed")
-				continue
-			}
-			data, _ = json.Marshal(overview)
-			tenantData[c.TenantID] = data
+			continue
 		}
-
 		select {
 		case c.Send <- data:
 		default:
-			// Client send buffer full, skip
+			h.logger.Warn().Int64("tenant_id", c.TenantID).Msg("dashboard ws: send buffer full, dropping")
 		}
 	}
+	h.mu.RUnlock()
 }
 
 // ServeWS upgrades the HTTP connection to WebSocket and streams dashboard updates.

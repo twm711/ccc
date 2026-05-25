@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/integration"
+	"github.com/divord97/ccc/internal/interfaces/http/middleware"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/divord97/ccc/pkg/snowflake"
 	"github.com/go-chi/chi/v5"
@@ -34,9 +35,10 @@ func (h *QuickReplyHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	now := time.Now()
 	qr := &integration.QuickReply{
-		ID: snowflake.NextID(), TenantID: 1,
+		ID: snowflake.NextID(), TenantID: tenantID,
 		Scope: integration.QuickReplyScope(in.Scope), ScopeID: in.ScopeID,
 		Title: in.Title, Content: in.Content, Shortcut: in.Shortcut,
 		SortOrder: in.SortOrder, IsActive: in.IsActive, CreatedAt: now, UpdatedAt: now,
@@ -49,7 +51,8 @@ func (h *QuickReplyHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *QuickReplyHandler) List(w http.ResponseWriter, r *http.Request) {
-	items, total, err := h.repo.List(r.Context(), 1, 0, 50)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	items, total, err := h.repo.List(r.Context(), tenantID, 0, 50)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -58,9 +61,10 @@ func (h *QuickReplyHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *QuickReplyHandler) Update(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	qr, err := h.repo.GetByID(r.Context(), id)
-	if err != nil || qr == nil {
+	if err != nil || qr == nil || qr.TenantID != tenantID {
 		response.Error(w, http.StatusNotFound, "quick reply not found")
 		return
 	}
@@ -89,7 +93,13 @@ func (h *QuickReplyHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *QuickReplyHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	qr, err := h.repo.GetByID(r.Context(), id)
+	if err != nil || qr == nil || qr.TenantID != tenantID {
+		response.Error(w, http.StatusNotFound, "quick reply not found")
+		return
+	}
 	if err := h.repo.Delete(r.Context(), id); err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return
@@ -98,7 +108,8 @@ func (h *QuickReplyHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *QuickReplyHandler) Available(w http.ResponseWriter, r *http.Request) {
-	items, err := h.repo.ListAvailable(r.Context(), 1, nil, nil)
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	items, err := h.repo.ListAvailable(r.Context(), tenantID, nil, nil)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())
 		return

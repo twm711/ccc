@@ -1,5 +1,4 @@
-import { useState, useEffect } from 'react';
-import { Row, Col, Card, Statistic, Table, Tag, Spin } from 'antd';
+import { Row, Col, Card, Statistic, Table, Tag, Spin, Alert } from 'antd';
 import {
   PhoneOutlined,
   TeamOutlined,
@@ -9,7 +8,7 @@ import {
   RiseOutlined,
   FallOutlined,
 } from '@ant-design/icons';
-import { dashboardApi } from '../../api/endpoints';
+import { useDashboardOverview, useDashboardAgents, useDashboardFunnel } from '../../api/hooks';
 
 interface Overview {
   total_calls_today: number;
@@ -54,33 +53,18 @@ interface FunnelData {
 }
 
 export default function DashboardPage() {
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [agents, setAgents] = useState<AgentStatus[]>([]);
-  const [funnel, setFunnel] = useState<FunnelData | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { data: overview, isLoading: loadingOv, error: errorOv } = useDashboardOverview();
+  const { data: agentsData, isLoading: loadingAg } = useDashboardAgents();
+  const { data: funnelData, isLoading: loadingFn } = useDashboardFunnel();
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const [ov, ag, fn] = await Promise.all([
-          dashboardApi.overview(),
-          dashboardApi.agents(),
-          dashboardApi.funnel(),
-        ]);
-        setOverview(ov.data);
-        setAgents(Array.isArray(ag.data) ? ag.data : []);
-        setFunnel(fn.data);
-      } catch { /* API not connected yet */ }
-      setLoading(false);
-    };
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const loading = loadingOv || loadingAg || loadingFn;
+  const agents: AgentStatus[] = Array.isArray(agentsData) ? agentsData : [];
+  const funnel: FunnelData | null = funnelData ?? null;
 
   if (loading) return <Spin size="large" style={{ display: 'block', margin: '100px auto' }} />;
+  if (errorOv) return <Alert type="error" message="加载仪表盘失败" description={String(errorOv)} />;
 
-  const ov = overview || {} as Overview;
+  const ov = (overview || {}) as Overview;
 
   return (
     <>

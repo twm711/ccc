@@ -85,6 +85,61 @@ func (r *MockCallRepo) ListWithFilter(_ context.Context, tenantID int64, filter 
 	return filtered[offset:end], total, nil
 }
 
+func (r *MockCallRepo) ListWithCursor(_ context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var filtered []*Call
+	for _, c := range r.calls {
+		if c.TenantID != tenantID {
+			continue
+		}
+		if cursor > 0 && c.ID >= cursor {
+			continue
+		}
+		if filter.Direction != nil && c.Direction != *filter.Direction {
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	if len(filtered) > limit {
+		filtered = filtered[:limit]
+	}
+	return filtered, nil
+}
+
+func (r *MockCallRepo) CountTodayByTenant(_ context.Context, tenantID int64) (total, inbound, outbound, answered, abandoned, active, queued int, err error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, c := range r.calls {
+		if c.TenantID != tenantID {
+			continue
+		}
+		total++
+		if c.Direction == DirectionInbound {
+			inbound++
+		} else {
+			outbound++
+		}
+		if c.AnsweredAt != nil {
+			answered++
+		}
+		if c.HangupReason != nil && *c.HangupReason == HangupAbandon {
+			abandoned++
+		}
+		if c.Status == CallStatusActive || c.Status == CallStatusRinging {
+			active++
+		}
+		if c.Status == CallStatusQueue {
+			queued++
+		}
+	}
+	return
+}
+
+func (r *MockCallRepo) SLATodayByTenant(_ context.Context, _ int64) (avgWaitSec float64, answeredWithin20s int, totalOffered int, longestWaitSec int, err error) {
+	return 0, 0, 0, 0, nil
+}
+
 type MockCallEventRepo struct {
 	mu     sync.RWMutex
 	events []*CallEvent

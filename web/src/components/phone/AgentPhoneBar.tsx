@@ -42,37 +42,72 @@ export default function AgentPhoneBar() {
   // Keep ref in sync with state so WebSocket handler can read current callId
   useEffect(() => { callIdRef.current = callId; }, [callId]);
 
-  // WebSocket for real-time call events
+  // WebSocket for real-time call events with auto-reconnect + heartbeat.
+  // Without these, a single network hiccup makes the agent unreachable until
+  // they refresh — a P0 prod incident in a 24/7 call center.
   useEffect(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/api/v1/ws/agent-events`;
-    const ws = new WebSocket(wsUrl);
+    let ws: WebSocket | null = null;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let backoffMs = 1000;
+    let stopped = false;
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        switch (data.type) {
-          case 'call_ringing':
-            setStatus('ringing');
-            setCallId(data.call_id);
-            break;
-          case 'call_answered':
-            setStatus('talking');
-            setDuration(0);
-            break;
-          case 'call_ended':
-            setAcwCallId(callIdRef.current);
-            setStatus('acw');
-            setHeld(false);
-            setMuted(false);
-            break;
+    const connect = () => {
+      ws = new WebSocket(wsUrl);
+
+      ws.onopen = () => {
+        backoffMs = 1000;
+        heartbeat = setInterval(() => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            try { ws.send(JSON.stringify({ type: 'ping' })); } catch { /* ignore */ }
+          }
+        }, 30000);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          switch (data.type) {
+            case 'call_ringing':
+              setStatus('ringing');
+              setCallId(data.call_id);
+              break;
+            case 'call_answered':
+              setStatus('talking');
+              setDuration(0);
+              break;
+            case 'call_ended':
+              setAcwCallId(callIdRef.current);
+              setStatus('acw');
+              setHeld(false);
+              setMuted(false);
+              break;
+          }
+        } catch {
+          // ignore
         }
-      } catch {
-        // ignore
-      }
+      };
+
+      const scheduleReconnect = () => {
+        if (stopped) return;
+        if (heartbeat) { clearInterval(heartbeat); heartbeat = null; }
+        reconnectTimer = setTimeout(connect, backoffMs);
+        backoffMs = Math.min(backoffMs * 2, 30000);
+      };
+      ws.onclose = scheduleReconnect;
+      ws.onerror = () => { try { ws?.close(); } catch { /* ignore */ } };
     };
 
-    return () => ws.close();
+    connect();
+
+    return () => {
+      stopped = true;
+      if (heartbeat) clearInterval(heartbeat);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      try { ws?.close(); } catch { /* ignore */ }
+    };
   }, []);
 
   // Timer for call duration.

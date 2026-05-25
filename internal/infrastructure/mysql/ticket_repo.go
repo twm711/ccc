@@ -112,6 +112,13 @@ func (r *TicketRepo) List(ctx context.Context, tenantID int64, offset, limit int
 	return result, err
 }
 
+func (r *TicketRepo) ListByCallID(ctx context.Context, callID int64) ([]*ticket.Ticket, error) {
+	var result []*ticket.Ticket
+	err := r.db.SelectContext(ctx, &result,
+		`SELECT * FROM tickets WHERE call_id=? ORDER BY created_at DESC`, callID)
+	return result, err
+}
+
 type TicketCommentRepo struct{ db *sqlx.DB }
 
 func NewTicketCommentRepo(db *sqlx.DB) *TicketCommentRepo { return &TicketCommentRepo{db: db} }

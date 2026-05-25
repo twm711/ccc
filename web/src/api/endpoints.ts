@@ -124,6 +124,7 @@ export const ticketApi = {
   create: (data: Record<string, unknown>) => api.post('/tickets', data),
   update: (id: number, data: Record<string, unknown>) => api.put(`/tickets/${id}`, data),
   addComment: (id: number, data: Record<string, unknown>) => api.post(`/tickets/${id}/comments`, data),
+  listByCall: (callId: number) => api.get(`/calls/${callId}/tickets`),
 };
 
 export const ticketTemplateApi = {

@@ -143,16 +143,19 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chiMiddleware.Recoverer)
-	r.Use(chiMiddleware.RequestID)
+	r.Use(middleware.RequestID)
+	r.Use(middleware.Tracing)
 	r.Use(middleware.CORS)
 	r.Use(middleware.Metrics)
 	r.Use(middleware.RequestLogger(deps.Logger))
 
 	r.Get("/health", handler.Health)
+	r.Get("/readyz", handler.Readyz)
 	r.Handle("/metrics", promhttp.Handler())
 
 	// --- Public Auth Route (no JWT) ---
 	r.Post("/api/v1/auth/login", deps.AuthHandler.Login)
+	r.Post("/api/v1/auth/refresh", deps.AuthHandler.RefreshToken)
 
 	// --- WebSocket Routes (auth via query param) ---
 	if deps.DashboardHub != nil {
@@ -178,8 +181,10 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Use(middleware.Auth(deps.JWTSecret))
+		r.Use(middleware.TenantGuard())
 		r.Use(middleware.RateLimit(deps.RateLimiter, deps.TenantSettingsRepo, 100))
 		r.Use(middleware.AuditLog(deps.AuditLogRepo))
+		r.Use(middleware.PIIRedact())
 
 		// --- Phase 0 Routes ---
 
@@ -297,6 +302,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Route("/calls", func(r chi.Router) {
 			r.Get("/", deps.CallHandler.List)
+			r.Get("/cursor", deps.CallHandler.ListCursor)
+			r.Get("/export", deps.CallHandler.Export)
 			r.Get("/{id}", deps.CallHandler.Get)
 			r.Get("/{id}/events", deps.CallHandler.GetEvents)
 			r.Get("/{id}/ivr-tracking", deps.CallHandler.GetIVRTracking)
@@ -630,6 +637,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Post("/webrtc-quality", deps.WebRTCQualityHandler.Save)
 		r.Get("/calls/{callId}/webrtc-quality", deps.WebRTCQualityHandler.ListByCall)
+		r.Get("/calls/{callId}/tickets", deps.TicketHandler.ListByCall)
 		r.Get("/agents/{agentId}/webrtc-quality", deps.WebRTCQualityHandler.ListByAgent)
 
 		// --- Advanced AI Routes ---

@@ -22,6 +22,7 @@ type TenantSettings struct {
 	TenantID                int64  `db:"tenant_id" json:"tenant_id"`
 	MaxAgents               int    `db:"max_agents" json:"max_agents"`
 	MaxConcurrentCalls      int    `db:"max_concurrent_calls" json:"max_concurrent_calls"`
+	RecordingAnnounce       bool   `db:"recording_announce" json:"recording_announce"`
 	RecordingRetentionDays  int    `db:"recording_retention_days" json:"recording_retention_days"`
 	RecordingStorageBackend string `db:"recording_storage_backend" json:"recording_storage_backend"`
 	Timezone                string `db:"timezone" json:"timezone"`
@@ -29,6 +30,15 @@ type TenantSettings struct {
 	DefaultACWSeconds       int    `db:"default_acw_seconds" json:"default_acw_seconds"`
 	APIRateLimitPerSec      int    `db:"api_rate_limit_per_sec" json:"api_rate_limit_per_sec"`
 	FamiliarAgentDays       int    `db:"familiar_agent_days" json:"familiar_agent_days"`
+	// Configurable thresholds (previously hardcoded).
+	MaxDailyDialPerPhone  int `db:"max_daily_dial_per_phone" json:"max_daily_dial_per_phone"` // 0 = use default (3)
+	CSATLowScoreThreshold int `db:"csat_low_score_threshold" json:"csat_low_score_threshold"` // 0 = use default (2)
+	RepeatCallThreshold   int `db:"repeat_call_threshold" json:"repeat_call_threshold"`       // 0 = use default (3)
+	// Resource quotas.
+	StorageQuotaMB     int64 `db:"storage_quota_mb" json:"storage_quota_mb"`           // 0 = unlimited
+	AICallQuotaPerDay  int   `db:"ai_call_quota_per_day" json:"ai_call_quota_per_day"` // 0 = unlimited
+	CDRRetentionDays   int   `db:"cdr_retention_days" json:"cdr_retention_days"`       // 0 = use recording_retention_days
+	TranscriptRetentionDays int `db:"transcript_retention_days" json:"transcript_retention_days"` // 0 = use recording_retention_days
 }
 
 type UserRole string
@@ -81,12 +91,32 @@ type Agent struct {
 	SIPDeviceStatus          string    `db:"sip_device_status" json:"sip_device_status"`
 	MaxConcurrent            int       `db:"max_concurrent" json:"max_concurrent"`
 	MaxChatSlots             int       `db:"max_chat_slots" json:"max_chat_slots"`
+	MaxEmailSlots            int       `db:"max_email_slots" json:"max_email_slots"`
 	ACWSeconds               int       `db:"acw_seconds" json:"acw_seconds"`
 	OutboundOnly             bool      `db:"outbound_only" json:"outbound_only"`
 	PersonalOutboundNumberID *int64    `db:"personal_outbound_number_id" json:"personal_outbound_number_id,omitempty"`
 	CreatedAt                time.Time `db:"created_at" json:"created_at"`
 	UpdatedAt                time.Time `db:"updated_at" json:"updated_at"`
 }
+
+// MediaType represents a communication channel type.
+type MediaType string
+
+const (
+	MediaTypeVoice MediaType = "voice"
+	MediaTypeChat  MediaType = "chat"
+	MediaTypeEmail MediaType = "email"
+)
+
+// MediaCapacity describes an agent's per-channel capacity and current load.
+type MediaCapacity struct {
+	Media       MediaType `json:"media"`
+	MaxSlots    int       `json:"max_slots"`
+	ActiveSlots int       `json:"active_slots"`
+}
+
+// HasCapacity returns true if the agent can accept more work on this media.
+func (mc MediaCapacity) HasCapacity() bool { return mc.ActiveSlots < mc.MaxSlots }
 
 type RoutingPolicy string
 
@@ -113,6 +143,7 @@ type SkillGroup struct {
 	Description   string           `db:"description" json:"description,omitempty"`
 	RoutingPolicy RoutingPolicy    `db:"routing_policy" json:"routing_policy"`
 	Priority      int              `db:"priority" json:"priority"`
+	MaxQueueSize  int              `db:"max_queue_size" json:"max_queue_size"`
 	MaxWaitSec    int              `db:"max_wait_sec" json:"max_wait_sec"`
 	OverflowGroup *int64           `db:"overflow_group_id" json:"overflow_group_id,omitempty"`
 	Status        SkillGroupStatus `db:"status" json:"status"`
@@ -177,4 +208,15 @@ type AgentPresenceLog struct {
 	BreakReasonCode string              `db:"break_reason_code" json:"break_reason_code,omitempty"`
 	DurationSec     int                 `db:"duration_sec" json:"duration_sec"`
 	CreatedAt       time.Time           `db:"created_at" json:"created_at"`
+}
+
+// AgentShiftLog records check-in/check-out sessions per day.
+type AgentShiftLog struct {
+	ID             int64      `db:"id" json:"id"`
+	TenantID       int64      `db:"tenant_id" json:"tenant_id"`
+	AgentID        int64      `db:"agent_id" json:"agent_id"`
+	ShiftDate      string     `db:"shift_date" json:"shift_date"`
+	CheckInAt      time.Time  `db:"check_in_at" json:"check_in_at"`
+	CheckOutAt     *time.Time `db:"check_out_at" json:"check_out_at,omitempty"`
+	TotalOnlineSec int        `db:"total_online_sec" json:"total_online_sec"`
 }

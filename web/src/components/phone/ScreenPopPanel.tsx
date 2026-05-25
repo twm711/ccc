@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Card, Descriptions, Tag, Tabs, Spin, Empty, Space } from 'antd';
-import { UserOutlined, PhoneOutlined, HistoryOutlined } from '@ant-design/icons';
+import { UserOutlined, PhoneOutlined, HistoryOutlined, ApiOutlined } from '@ant-design/icons';
 import api from '../../api/client';
 
 interface CustomerInfo {
@@ -14,25 +14,41 @@ interface CustomerInfo {
   history: { id: number; date: string; type: string; summary: string }[];
 }
 
-export default function ScreenPopPanel({ callerNumber }: { callerNumber?: string }) {
+interface ScreenPopResponse {
+  customer: CustomerInfo | null;
+  urls?: string[];
+  ivr_context?: Record<string, string>;
+  iframe_url?: string;
+  interactions?: { id: number; date: string; type: string; summary: string }[];
+}
+
+export default function ScreenPopPanel({ callerNumber, callId }: { callerNumber?: string; callId?: number }) {
   const [customer, setCustomer] = useState<CustomerInfo | null>(null);
   const [loading, setLoading] = useState(false);
-  const [iframeUrl, setIframeUrl] = useState<string>('');
+  const [iframeUrls, setIframeUrls] = useState<string[]>([]);
+  const [ivrContext, setIvrContext] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (!callerNumber) return;
+    if (!callerNumber && !callId) return;
     setLoading(true);
-    api.get('/screen-pop/lookup', { params: { phone: callerNumber } })
+    const params: Record<string, string | number> = {};
+    if (callId) params.call_id = callId;
+    else if (callerNumber) params.phone = callerNumber;
+    api.get('/screen-pop/lookup', { params })
       .then((res) => {
-        setCustomer(res.data?.customer || null);
-        setIframeUrl(res.data?.iframe_url || '');
+        const data = res.data as ScreenPopResponse;
+        setCustomer(data?.customer || null);
+        setIvrContext(data?.ivr_context || {});
+        const urls = data?.urls || [];
+        const combined = urls.length > 0 ? urls : (data?.iframe_url ? [data.iframe_url] : []);
+        setIframeUrls(combined);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [callerNumber]);
+  }, [callerNumber, callId]);
 
   if (loading) return <Card size="small"><Spin style={{ display: 'block', padding: 40 }} /></Card>;
-  if (!callerNumber) return null;
+  if (!callerNumber && !callId) return null;
 
   return (
     <Card title={<Space><UserOutlined /> 来电弹屏</Space>} size="small">
@@ -81,11 +97,22 @@ export default function ScreenPopPanel({ callerNumber }: { callerNumber?: string
             <Empty description="暂无历史" image={Empty.PRESENTED_IMAGE_SIMPLE} />
           ),
         },
-        ...(iframeUrl ? [{
-          key: 'iframe',
-          label: <Space><PhoneOutlined />业务系统</Space>,
-          children: <iframe src={iframeUrl} style={{ width: '100%', height: 400, border: 'none' }} title="弹屏" />,
+        ...(Object.keys(ivrContext).length > 0 ? [{
+          key: 'ivr',
+          label: <Space><ApiOutlined />IVR 上下文</Space>,
+          children: (
+            <Descriptions size="small" column={1} bordered>
+              {Object.entries(ivrContext).map(([k, v]) => (
+                <Descriptions.Item key={k} label={k}>{v}</Descriptions.Item>
+              ))}
+            </Descriptions>
+          ),
         }] : []),
+        ...iframeUrls.map((url, idx) => ({
+          key: `iframe-${idx}`,
+          label: <Space><PhoneOutlined />{iframeUrls.length > 1 ? `业务系统 ${idx + 1}` : '业务系统'}</Space>,
+          children: <iframe src={url} style={{ width: '100%', height: 400, border: 'none' }} title={`弹屏-${idx}`} />,
+        })),
       ]} />
     </Card>
   );

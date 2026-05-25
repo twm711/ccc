@@ -21,6 +21,26 @@ func NewScheduler(cbRepo call.CallbackRequestRepository, callSvc *call.CallServi
 	return &Scheduler{callbackRepo: cbRepo, callSvc: callSvc, outboundSvc: outboundSvc, logger: logger}
 }
 
+// Run drives the callback scheduler in the background, polling every interval
+// until ctx is canceled.
+func (s *Scheduler) Run(ctx context.Context, interval time.Duration) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := s.ProcessAllPending(ctx)
+			if err != nil {
+				s.logger.Warn().Err(err).Msg("callback: scheduler tick failed")
+			} else if n > 0 {
+				s.logger.Info().Int("processed", n).Msg("callback: scheduler tick completed")
+			}
+		}
+	}
+}
+
 // ProcessAllPending finds pending callbacks across all tenants and attempts them.
 func (s *Scheduler) ProcessAllPending(ctx context.Context) (int, error) {
 	pending, err := s.callbackRepo.ListAllPending(ctx)
@@ -50,7 +70,9 @@ func (s *Scheduler) processList(ctx context.Context, pending []*call.CallbackReq
 			now := time.Now()
 			cb.Status = "max_attempts"
 			cb.LastAttemptAt = &now
-			_ = s.callbackRepo.Update(ctx, cb)
+			if err := s.callbackRepo.Update(ctx, cb); err != nil {
+				s.logger.Warn().Err(err).Int64("callback_id", cb.ID).Msg("failed to update max_attempts status")
+			}
 			continue
 		}
 
@@ -88,7 +110,9 @@ func (s *Scheduler) processList(ctx context.Context, pending []*call.CallbackReq
 			processed++
 		}
 
-		_ = s.callbackRepo.Update(ctx, cb)
+		if err := s.callbackRepo.Update(ctx, cb); err != nil {
+			s.logger.Warn().Err(err).Int64("callback_id", cb.ID).Msg("failed to update callback status")
+		}
 	}
 	return processed, nil
 }

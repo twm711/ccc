@@ -47,6 +47,10 @@ const (
 	NodeSubFlow            NodeType = "sub_flow"
 	NodeDigitalEmployee    NodeType = "digital_employee"
 	NodeCallback           NodeType = "callback"
+	NodeNLU                NodeType = "nlu"
+	NodeQueuePosition      NodeType = "queue_position"
+	NodeSentimentGate      NodeType = "sentiment_gate"
+	NodeCustomerLookup     NodeType = "customer_lookup"
 	NodeEnd                NodeType = "end"
 )
 
@@ -56,7 +60,7 @@ var AllNodeTypes = []NodeType{
 	NodeSetVariable, NodeVoicemail, NodeHangupReason,
 	NodeFunction, NodeHTTPRequest, NodeJSONParser, NodeSMS,
 	NodeSatisfactionRating, NodeASR, NodeSubFlow, NodeDigitalEmployee,
-	NodeCallback, NodeEnd,
+	NodeCallback, NodeNLU, NodeQueuePosition, NodeSentimentGate, NodeCustomerLookup, NodeEnd,
 }
 
 type IVRFlow struct {
@@ -70,6 +74,7 @@ type IVRFlow struct {
 	Status      FlowStatus     `db:"status" json:"status"`
 	LockedBy    *int64         `db:"locked_by" json:"locked_by,omitempty"`
 	LockedAt    *time.Time     `db:"locked_at" json:"locked_at,omitempty"`
+	LockExpiresAt *time.Time  `db:"lock_expires_at" json:"lock_expires_at,omitempty"`
 	PublishedAt *time.Time     `db:"published_at" json:"published_at,omitempty"`
 	CreatedAt   time.Time      `db:"created_at" json:"created_at"`
 	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`

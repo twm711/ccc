@@ -30,3 +30,56 @@ func (w *WebRTCQualityLog) QualityLevel() string {
 		return "poor"
 	}
 }
+
+// QualitySummary aggregates WebRTC quality metrics for monitoring.
+type QualitySummary struct {
+	CallID      int64   `json:"call_id"`
+	SampleCount int     `json:"sample_count"`
+	AvgMOS      float64 `json:"avg_mos"`
+	MinMOS      float64 `json:"min_mos"`
+	MaxMOS      float64 `json:"max_mos"`
+	AvgJitter   float64 `json:"avg_jitter"`
+	AvgLoss     float64 `json:"avg_packet_loss"`
+	AvgRTT      float64 `json:"avg_rtt"`
+	Level       string  `json:"level"`
+}
+
+// SummarizeQuality aggregates quality logs for a call.
+func SummarizeQuality(logs []WebRTCQualityLog) QualitySummary {
+	if len(logs) == 0 {
+		return QualitySummary{}
+	}
+	s := QualitySummary{
+		CallID:      logs[0].CallID,
+		SampleCount: len(logs),
+		MinMOS:      logs[0].MOS,
+		MaxMOS:      logs[0].MOS,
+	}
+	var totalMOS, totalJitter, totalLoss, totalRTT float64
+	for _, l := range logs {
+		totalMOS += l.MOS
+		totalJitter += l.Jitter
+		totalLoss += l.PacketLossRate
+		totalRTT += l.RoundTripTime
+		if l.MOS < s.MinMOS {
+			s.MinMOS = l.MOS
+		}
+		if l.MOS > s.MaxMOS {
+			s.MaxMOS = l.MOS
+		}
+	}
+	n := float64(len(logs))
+	s.AvgMOS = totalMOS / n
+	s.AvgJitter = totalJitter / n
+	s.AvgLoss = totalLoss / n
+	s.AvgRTT = totalRTT / n
+	switch {
+	case s.AvgMOS >= 4.0:
+		s.Level = "good"
+	case s.AvgMOS >= 3.0:
+		s.Level = "fair"
+	default:
+		s.Level = "poor"
+	}
+	return s
+}

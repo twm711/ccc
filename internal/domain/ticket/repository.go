@@ -20,6 +20,7 @@ type TicketRepository interface {
 	GetByID(ctx context.Context, id int64) (*Ticket, error)
 	Update(ctx context.Context, t *Ticket) error
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*Ticket, error)
+	ListByCallID(ctx context.Context, callID int64) ([]*Ticket, error)
 }
 
 type TicketCommentRepository interface {

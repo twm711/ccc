@@ -14,12 +14,26 @@ import (
 	"github.com/divord97/ccc/internal/domain/crm"
 	"github.com/divord97/ccc/internal/domain/identity"
 	"github.com/divord97/ccc/internal/infrastructure/esl"
+	"github.com/divord97/ccc/pkg/bizlog"
+	"github.com/divord97/ccc/pkg/metrics"
 	"github.com/divord97/ccc/pkg/snowflake"
+	"github.com/rs/zerolog"
 )
 
 // AgentNotifier pushes real-time events to connected agent WebSocket clients.
 type AgentNotifier interface {
 	NotifyAgent(agentID int64, eventType string, callID int64, payload interface{})
+}
+
+// ConcurrencyGuard tracks per-tenant concurrent call counts.
+type ConcurrencyGuard interface {
+	Acquire(ctx context.Context, tenantID int64, maxConcurrent int) (bool, error)
+	Release(ctx context.Context, tenantID int64)
+}
+
+// TenantSettingsLookup resolves tenant settings for concurrency limits.
+type TenantSettingsLookup interface {
+	GetByTenantID(ctx context.Context, tenantID int64) (maxConcurrentCalls int)
 }
 
 // EventPublisher pushes call/agent lifecycle events to an external bus
@@ -33,6 +47,27 @@ type EventPublisher interface {
 // the ACD familiar routing policy can prefer the same agent on repeat calls.
 type FamiliarAgentRecorder interface {
 	RememberAgent(ctx context.Context, tenantID int64, caller string, agentUserID int64, ttlDays int)
+}
+
+// QAAutoTrigger runs quality inspection after a call ends.
+type QAAutoTrigger interface {
+	AutoInspect(ctx context.Context, tenantID, callID int64)
+}
+
+// RecordingEncryptor encrypts recording file data at rest.
+type RecordingEncryptor interface {
+	Encrypt(keyID string, plaintext []byte) ([]byte, error)
+}
+
+// TicketCreator creates a ticket from an automated trigger.
+type TicketCreator interface {
+	CreateAutoTicket(ctx context.Context, tenantID int64, title, description, priority string, callID *int64) error
+}
+
+// RepeatCallDetector tracks per-caller inbound frequency and returns the
+// daily count after incrementing.
+type RepeatCallDetector interface {
+	IncrAndGet(ctx context.Context, tenantID int64, caller string) (count int, err error)
 }
 
 // Service orchestrates cross-domain side effects for call lifecycle events.
@@ -52,6 +87,16 @@ type Service struct {
 	publisher         EventPublisher
 	familiar          FamiliarAgentRecorder
 	familiarTTLDays   func(tenantID int64) int
+	concurrency       ConcurrencyGuard
+	tenantSettings    TenantSettingsLookup
+	recordingAnnounce func(ctx context.Context, tenantID int64) bool
+	qaTrigger         QAAutoTrigger
+	recEncryptor      RecordingEncryptor
+	recEncryptKeyID   string
+	ticketCreator     TicketCreator
+	repeatDetector    RepeatCallDetector
+	repeatThreshold   int
+	logger            zerolog.Logger
 }
 
 func NewService(
@@ -63,6 +108,7 @@ func NewService(
 	screenPop *screenpop.Service,
 	recordingRepo call.RecordingRepository,
 	eslClient *esl.Client,
+	logger zerolog.Logger,
 ) *Service {
 	return &Service{
 		callSvc:       callSvc,
@@ -73,6 +119,7 @@ func NewService(
 		screenPop:     screenPop,
 		recordingRepo: recordingRepo,
 		eslClient:     eslClient,
+		logger:        logger,
 	}
 }
 
@@ -105,6 +152,46 @@ func (s *Service) SetFamiliarRecorder(rec FamiliarAgentRecorder, ttlDays func(te
 	s.familiarTTLDays = ttlDays
 }
 
+// SetRecordingAnnounceLookup wires a function that returns whether the tenant
+// requires a recording compliance announcement before call recording starts.
+func (s *Service) SetRecordingAnnounceLookup(fn func(ctx context.Context, tenantID int64) bool) {
+	s.recordingAnnounce = fn
+}
+
+// SetTicketCreator wires automatic ticket creation for repeat-call detection.
+func (s *Service) SetTicketCreator(tc TicketCreator) { s.ticketCreator = tc }
+
+// SetRepeatCallDetector wires a detector that counts same-caller daily calls.
+// When count >= threshold, an escalation ticket is auto-created.
+func (s *Service) SetRepeatCallDetector(d RepeatCallDetector, threshold int) {
+	s.repeatDetector = d
+	s.repeatThreshold = threshold
+}
+
+// SetQAAutoTrigger wires QA auto-inspection for completed calls.
+func (s *Service) SetQAAutoTrigger(t QAAutoTrigger) {
+	s.qaTrigger = t
+}
+
+// SetRecordingEncryptor wires optional at-rest encryption for recordings.
+func (s *Service) SetRecordingEncryptor(enc RecordingEncryptor, keyID string) {
+	s.recEncryptor = enc
+	s.recEncryptKeyID = keyID
+}
+
+// SetConcurrencyGuard wires the per-tenant concurrent call limiter.
+func (s *Service) SetConcurrencyGuard(cg ConcurrencyGuard, tsl TenantSettingsLookup) {
+	s.concurrency = cg
+	s.tenantSettings = tsl
+}
+
+func (s *Service) encryptionAlgo() string {
+	if s.recEncryptor != nil {
+		return "AES-256-GCM"
+	}
+	return ""
+}
+
 func (s *Service) publish(ctx context.Context, subject string, payload interface{}) {
 	if s.publisher == nil {
 		return
@@ -121,11 +208,16 @@ func (s *Service) publish(ctx context.Context, subject string, payload interface
 //   - CSAT satisfaction survey
 //   - Webhook notification to external systems
 //   - CRM interaction history record
-func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupReason) (*call.Call, error) {
-	c, err := s.callSvc.EndCall(ctx, callID, reason)
+func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupReason, hangupBy ...call.HangupBy) (*call.Call, error) {
+	c, err := s.callSvc.EndCall(ctx, callID, reason, hangupBy...)
 	if err != nil {
 		return nil, err
 	}
+
+	bizlog.CallEvent(s.logger, c.TenantID, c.ID, "call.ended").
+		Str("direction", string(c.Direction)).
+		Str("hangup_reason", string(reason)).
+		Msg("call ended")
 
 	// Hangup FreeSWITCH channel
 	if s.eslClient != nil && c.ChannelUUID != "" {
@@ -139,7 +231,7 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 			durSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
 		}
 		recPath := fmt.Sprintf("/recordings/%d/%d.wav", c.TenantID, c.ID)
-		_ = s.recordingRepo.Create(ctx, &call.Recording{
+		if err := s.recordingRepo.Create(ctx, &call.Recording{
 			ID:          snowflake.NextID(),
 			TenantID:    c.TenantID,
 			CallID:      c.ID,
@@ -150,18 +242,26 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 			MimeType:    "audio/wav",
 			StorageTier: "hot",
 			Consent:     true,
-			Status:      "completed",
-			CreatedAt:   time.Now(),
-		})
+			Status:          "completed",
+			EncryptionAlgo:  s.encryptionAlgo(),
+			EncryptionKeyID: s.recEncryptKeyID,
+			CreatedAt:       time.Now(),
+		}); err != nil {
+			s.logger.Error().Err(err).Int64("call_id", c.ID).Msg("recording: create failed")
+		}
 		c.RecordingURL = &recPath
-		_ = s.callSvc.UpdateDurations(ctx, c)
+		if err := s.callSvc.UpdateDurations(ctx, c); err != nil {
+			s.logger.Error().Err(err).Int64("call_id", c.ID).Msg("recording: update durations failed")
+		}
 	}
 
 	// Calculate IVR/queue/ring durations from call events
 	events, _ := s.callSvc.ListEvents(ctx, callID)
 	if len(events) > 0 {
 		s.callSvc.CalculateDurations(c, events)
-		_ = s.callSvc.UpdateDurations(ctx, c)
+		if err := s.callSvc.UpdateDurations(ctx, c); err != nil {
+			s.logger.Error().Err(err).Int64("call_id", c.ID).Msg("durations: update failed")
+		}
 	}
 
 	// Agent → ACW (non-blocking, best-effort)
@@ -174,68 +274,54 @@ func (s *Service) EndCall(ctx context.Context, callID int64, reason call.HangupR
 		s.notifier.NotifyAgent(*c.AgentUserID, "call.ended", c.ID, c)
 	}
 
-	// CSAT survey trigger (non-blocking)
-	if s.csatSvc != nil {
-		_ = s.csatSvc.TriggerSurvey(ctx, c.TenantID, c.ID, c.AgentUserID)
-	}
-
-	// Webhook notification (async, non-blocking)
-	if s.webhookSvc != nil {
-		s.webhookSvc.Deliver(ctx, webhook.Event{
-			TenantID:  c.TenantID,
-			Type:      "call.ended",
-			Payload:   c,
-			Timestamp: time.Now(),
-		})
-	}
-
-	// CRM interaction record (non-blocking)
-	if s.customerSvc != nil && c.AgentUserID != nil {
-		phone := c.Caller
-		if c.Direction == call.DirectionOutbound {
-			phone = c.Callee
-		}
-		customer, _ := s.customerSvc.FindByPhone(ctx, c.TenantID, phone)
-		if customer != nil {
-			_ = s.customerSvc.RecordInteraction(ctx, crm.RecordInteractionInput{
-				CustomerID: customer.ID,
-				TenantID:   c.TenantID,
-				Channel:    "voice",
-				Direction:  string(c.Direction),
-				Summary:    fmt.Sprintf("%s call, duration %ds", c.Direction, c.DurationSec),
-				CallID:     &c.ID,
-				AgentName:  fmt.Sprintf("agent_%d", *c.AgentUserID),
-			})
-		}
-	}
-
-	// Campaign case writeback: answered→completed (with duration), unanswered→failed (retry)
-	if s.campaignSvc != nil && c.CampaignCaseID != nil {
-		if c.AnsweredAt != nil {
-			talkSec := 0
-			if c.EndedAt != nil {
-				talkSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
+	// Post-call hooks run asynchronously to avoid blocking the call teardown path.
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				s.logger.Error().Interface("panic", r).Int64("call_id", c.ID).Msg("postCallHooksAsync: recovered panic")
 			}
-			_, _ = s.campaignSvc.MarkCaseCompleted(ctx, *c.CampaignCaseID, "completed", talkSec)
-		} else {
-			_, _ = s.campaignSvc.MarkCaseFailed(ctx, *c.CampaignCaseID)
-		}
+		}()
+		s.postCallHooksAsync(c)
+	}()
+
+	if c.AnsweredAt == nil && c.Direction == call.DirectionInbound {
+		metrics.CallsAbandoned.Inc()
 	}
 
-	// Familiar-customer affinity: remember who served this caller for next time.
-	if s.familiar != nil && c.AgentUserID != nil && c.Direction == call.DirectionInbound && c.Caller != "" {
-		ttlDays := 30
-		if s.familiarTTLDays != nil {
-			if d := s.familiarTTLDays(c.TenantID); d > 0 {
-				ttlDays = d
-			}
-		}
-		s.familiar.RememberAgent(ctx, c.TenantID, c.Caller, *c.AgentUserID, ttlDays)
+	if s.concurrency != nil {
+		s.concurrency.Release(ctx, c.TenantID)
 	}
+	hangupByLabel := "system"
+	if c.HangupBy != nil {
+		hangupByLabel = string(*c.HangupBy)
+	}
+	metrics.CallsEnded.WithLabelValues(hangupByLabel).Inc()
+	metrics.ActiveCallsGauge.Dec()
+	metrics.TenantActiveCalls.WithLabelValues(fmt.Sprintf("%d", c.TenantID)).Dec()
 
 	s.publish(ctx, "ccc.call.ended", c)
 
 	return c, nil
+}
+
+// checkConcurrencyLimit verifies the tenant has not exceeded max_concurrent_calls.
+func (s *Service) checkConcurrencyLimit(ctx context.Context, tenantID int64) error {
+	if s.concurrency == nil || s.tenantSettings == nil {
+		return nil
+	}
+	maxConcurrent := s.tenantSettings.GetByTenantID(ctx, tenantID)
+	if maxConcurrent <= 0 {
+		return nil
+	}
+	allowed, err := s.concurrency.Acquire(ctx, tenantID, maxConcurrent)
+	if err != nil {
+		return nil // fail open
+	}
+	if !allowed {
+		metrics.ConcurrencyRejected.Inc()
+		return fmt.Errorf("tenant %d exceeded max concurrent calls (%d)", tenantID, maxConcurrent)
+	}
+	return nil
 }
 
 // AnswerCall marks a call as answered and triggers side effects:
@@ -250,13 +336,29 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 		return nil, nil, err
 	}
 
+	// SLO: track answer latency and SLA compliance
+	if c.AnsweredAt != nil {
+		latency := c.AnsweredAt.Sub(c.StartedAt).Seconds()
+		metrics.CallAnswerLatency.Observe(latency)
+		if latency <= 20 {
+			metrics.SLAMet.Inc()
+		} else {
+			metrics.SLAMissed.Inc()
+		}
+	}
+	tenantStr := fmt.Sprintf("%d", c.TenantID)
+	metrics.TenantActiveCalls.WithLabelValues(tenantStr).Inc()
+
 	// Agent → Talking state
 	if s.presenceSvc != nil {
 		_, _ = s.presenceSvc.TransitionTo(ctx, agentUserID, identity.PresenceTalking)
 	}
 
-	// Start recording via ESL
+	// Play recording compliance announcement if configured, then start recording.
 	if s.eslClient != nil && c.ChannelUUID != "" {
+		if s.recordingAnnounce != nil && s.recordingAnnounce(ctx, c.TenantID) {
+			_ = s.eslClient.WhisperAnnouncement(ctx, c.ChannelUUID, "ivr/recording_announce.wav")
+		}
 		filePath := fmt.Sprintf("/recordings/%d/%d.wav", c.TenantID, c.ID)
 		_ = s.eslClient.StartRecording(ctx, c.ChannelUUID, filePath)
 	}
@@ -266,9 +368,8 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 		s.notifier.NotifyAgent(agentUserID, "call.answered", c.ID, c)
 	}
 
-	// Screen pop for inbound calls
 	var popData *screenpop.ScreenPopData
-	if s.screenPop != nil && c.Direction == call.DirectionInbound {
+	if s.screenPop != nil {
 		popData, _ = s.screenPop.BuildScreenPop(ctx, c.TenantID, screenpop.CallInfo{
 			CallID:      c.ID,
 			Caller:      c.Caller,
@@ -295,10 +396,16 @@ func (s *Service) AnswerCall(ctx context.Context, callID int64, agentUserID int6
 
 // HandleInboundCall creates an inbound call, runs IVR if configured, and transitions to queue.
 func (s *Service) HandleInboundCall(ctx context.Context, in call.CreateCallInput) (*call.Call, error) {
+	if err := s.checkConcurrencyLimit(ctx, in.TenantID); err != nil {
+		return nil, err
+	}
+
 	c, err := s.callSvc.CreateInboundCall(ctx, in)
 	if err != nil {
 		return nil, err
 	}
+	metrics.CallsCreated.WithLabelValues("inbound").Inc()
+	metrics.ActiveCallsGauge.Inc()
 
 	// Run IVR flow if engine and flow are configured
 	if s.ivrEngine != nil && c.IVRFlowID != nil {
@@ -345,18 +452,104 @@ func (s *Service) TransitionCallToQueue(ctx context.Context, callID, skillGroupI
 		return nil, err
 	}
 	if s.queueSnapshotRepo != nil {
-		_ = s.queueSnapshotRepo.Create(ctx, &call.QueueSnapshot{
+		if err := s.queueSnapshotRepo.Create(ctx, &call.QueueSnapshot{
 			ID:           snowflake.NextID(),
 			TenantID:     c.TenantID,
 			SkillGroupID: skillGroupID,
 			WaitingCount: 1,
 			SnapshotAt:   time.Now(),
-		})
+		}); err != nil {
+			s.logger.Warn().Err(err).Int64("call_id", c.ID).Msg("failed to create queue snapshot")
+		}
 	}
 	if s.notifier != nil && c.AgentUserID != nil {
 		s.notifier.NotifyAgent(*c.AgentUserID, "call.queued", c.ID, c)
 	}
 	return c, nil
+}
+
+// postCallHooksAsync runs non-critical post-call side effects asynchronously.
+func (s *Service) postCallHooksAsync(c *call.Call) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// CSAT survey trigger
+	if s.csatSvc != nil {
+		_ = s.csatSvc.TriggerSurvey(ctx, c.TenantID, c.ID, c.AgentUserID)
+	}
+
+	// Webhook notification
+	if s.webhookSvc != nil {
+		s.webhookSvc.Deliver(ctx, webhook.Event{
+			TenantID:  c.TenantID,
+			Type:      "call.ended",
+			Payload:   c,
+			Timestamp: time.Now(),
+		})
+	}
+
+	// CRM interaction record + bidirectional call↔customer linking
+	if s.customerSvc != nil && c.AgentUserID != nil {
+		phone := c.Caller
+		if c.Direction == call.DirectionOutbound {
+			phone = c.Callee
+		}
+		customer, _ := s.customerSvc.FindByPhone(ctx, c.TenantID, phone)
+		if customer != nil {
+			if c.CustomerID == nil {
+				c.CustomerID = &customer.ID
+				_ = s.callSvc.UpdateCustomerID(ctx, c.ID, customer.ID)
+			}
+			_ = s.customerSvc.RecordInteraction(ctx, crm.RecordInteractionInput{
+				CustomerID: customer.ID,
+				TenantID:   c.TenantID,
+				Channel:    "voice",
+				Direction:  string(c.Direction),
+				Summary:    fmt.Sprintf("%s call, duration %ds", c.Direction, c.DurationSec),
+				CallID:     &c.ID,
+				AgentName:  fmt.Sprintf("agent_%d", *c.AgentUserID),
+			})
+		}
+	}
+
+	// Campaign case writeback
+	if s.campaignSvc != nil && c.CampaignCaseID != nil {
+		if c.AnsweredAt != nil {
+			talkSec := 0
+			if c.EndedAt != nil {
+				talkSec = int(c.EndedAt.Sub(*c.AnsweredAt).Seconds())
+			}
+			_, _ = s.campaignSvc.MarkCaseCompleted(ctx, *c.CampaignCaseID, "completed", talkSec)
+		} else {
+			_, _ = s.campaignSvc.MarkCaseFailed(ctx, *c.CampaignCaseID)
+		}
+	}
+
+	// Familiar-customer affinity
+	if s.familiar != nil && c.AgentUserID != nil && c.Direction == call.DirectionInbound && c.Caller != "" {
+		ttlDays := 30
+		if s.familiarTTLDays != nil {
+			if d := s.familiarTTLDays(c.TenantID); d > 0 {
+				ttlDays = d
+			}
+		}
+		s.familiar.RememberAgent(ctx, c.TenantID, c.Caller, *c.AgentUserID, ttlDays)
+	}
+
+	// QA auto-inspection
+	if s.qaTrigger != nil && c.AnsweredAt != nil {
+		s.qaTrigger.AutoInspect(ctx, c.TenantID, c.ID)
+	}
+
+	// Repeat-call ticket escalation
+	if s.repeatDetector != nil && s.ticketCreator != nil && c.Direction == call.DirectionInbound && c.Caller != "" {
+		count, err := s.repeatDetector.IncrAndGet(ctx, c.TenantID, c.Caller)
+		if err == nil && s.repeatThreshold > 0 && count >= s.repeatThreshold {
+			title := fmt.Sprintf("Repeat caller: %s (%d calls today)", c.Caller, count)
+			desc := fmt.Sprintf("Caller %s has called %d times today. Last call ID: %d. Possible unresolved issue.", c.Caller, count, c.ID)
+			_ = s.ticketCreator.CreateAutoTicket(ctx, c.TenantID, title, desc, "high", &c.ID)
+		}
+	}
 }
 
 // TransitionCallToRinging moves a call from Queue/IVR to Ringing status via lifecycle.

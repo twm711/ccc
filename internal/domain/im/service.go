@@ -19,12 +19,16 @@ var validContentTypes = map[ContentType]bool{
 	ContentTypeSystem: true,
 }
 
+// SessionCloseHook is invoked asynchronously after an IM session is closed.
+type SessionCloseHook func(ctx context.Context, sess *IMSession)
+
 // IMService handles IM channel, session, and message operations.
 type IMService struct {
-	channels    IMChannelRepository
-	sessions    IMSessionRepository
-	messages    IMMessageRepository
+	channels     IMChannelRepository
+	sessions     IMSessionRepository
+	messages     IMMessageRepository
 	maxChatSlots int
+	closeHooks   []SessionCloseHook
 }
 
 func NewIMService(
@@ -43,6 +47,9 @@ func NewIMService(
 		maxChatSlots: maxChatSlots,
 	}
 }
+
+// OnSessionClose registers a hook called after a session is closed.
+func (s *IMService) OnSessionClose(h SessionCloseHook) { s.closeHooks = append(s.closeHooks, h) }
 
 // --- Channel ---
 
@@ -190,6 +197,10 @@ func (s *IMService) CloseSession(ctx context.Context, sessionID int64) (*IMSessi
 	sess.EndAt = &now
 	if err := s.sessions.Update(ctx, sess); err != nil {
 		return nil, err
+	}
+	for _, h := range s.closeHooks {
+		h := h
+		go h(context.Background(), sess)
 	}
 	return sess, nil
 }

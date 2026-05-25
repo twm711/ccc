@@ -21,6 +21,10 @@ func Init(nodeID int64) error {
 }
 
 // NextID generates a new unique snowflake ID.
+// Panics if Init has not been called; this is a programmer error.
 func NextID() int64 {
+	if node == nil {
+		panic("snowflake: NextID called before Init")
+	}
 	return node.Generate().Int64()
 }

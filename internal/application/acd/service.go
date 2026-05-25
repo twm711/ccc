@@ -24,11 +24,13 @@ import (
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/internal/domain/identity"
+	"github.com/divord97/ccc/pkg/metrics"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
@@ -46,7 +48,7 @@ const (
 // LifecycleService is the subset of lifecycle.Service required by the dispatcher.
 type LifecycleService interface {
 	TransitionCallToRinging(ctx context.Context, callID, agentUserID int64) (*call.Call, error)
-	EndCall(ctx context.Context, callID int64, reason call.HangupReason) (*call.Call, error)
+	EndCall(ctx context.Context, callID int64, reason call.HangupReason, hangupBy ...call.HangupBy) (*call.Call, error)
 }
 
 var _ LifecycleService = (*lifecycle.Service)(nil)
@@ -54,6 +56,7 @@ var _ LifecycleService = (*lifecycle.Service)(nil)
 // PresenceRepo exposes the lookups the dispatcher needs.
 type PresenceRepo interface {
 	GetByAgentID(ctx context.Context, agentID int64) (*identity.AgentPresence, error)
+	GetByAgentIDs(ctx context.Context, agentIDs []int64) ([]*identity.AgentPresence, error)
 }
 
 // MembersRepo lists agents in a skill group.
@@ -73,6 +76,11 @@ type CallLookup interface {
 	GetByID(ctx context.Context, id int64) (*call.Call, error)
 }
 
+// AgentLookup resolves an agent record to read per-media capacity settings.
+type AgentLookup interface {
+	GetByID(ctx context.Context, id int64) (*identity.Agent, error)
+}
+
 // Service is the ACD dispatcher.
 type Service struct {
 	rdb        *redis.Client
@@ -81,8 +89,10 @@ type Service struct {
 	members    MembersRepo
 	skillGroup SkillGroups
 	calls      CallLookup
+	agentLookup AgentLookup
 	logger     zerolog.Logger
 	pollPeriod time.Duration
+	rngMu      sync.Mutex
 	rng        *rand.Rand
 }
 
@@ -97,6 +107,9 @@ type Config struct {
 	Logger     zerolog.Logger
 	PollPeriod time.Duration
 }
+
+// SetAgentLookup wires agent lookup for media capacity routing.
+func (s *Service) SetAgentLookup(al AgentLookup) { s.agentLookup = al }
 
 // NewService wires the ACD dispatcher. The returned service is inert until Run is called.
 func NewService(cfg Config) *Service {
@@ -123,6 +136,21 @@ func (s *Service) Enqueue(ctx context.Context, callID, skillGroupID int64, prior
 	if s.rdb == nil {
 		return errors.New("acd: redis client not configured")
 	}
+
+	// Check max_queue_size before enqueuing; overflow to backup group when possible.
+	if sg, err := s.skillGroup.GetByID(ctx, skillGroupID); err == nil && sg != nil && sg.MaxQueueSize > 0 {
+		qLen, _ := s.rdb.ZCard(ctx, queueKey(skillGroupID)).Result()
+		if qLen >= int64(sg.MaxQueueSize) {
+			if sg.OverflowGroup != nil {
+				s.logger.Info().Int64("call_id", callID).Int64("from_sg", skillGroupID).Int64("to_sg", *sg.OverflowGroup).Msg("acd: queue full, overflowing to backup group")
+				return s.Enqueue(ctx, callID, *sg.OverflowGroup, priority)
+			}
+			s.logger.Warn().Int64("call_id", callID).Int64("sg", skillGroupID).Int("max", sg.MaxQueueSize).Msg("acd: queue full, rejecting")
+			metrics.QueueRejected.Inc()
+			return fmt.Errorf("acd: queue full for skill group %d (max %d)", skillGroupID, sg.MaxQueueSize)
+		}
+	}
+
 	now := time.Now()
 	score := scoreFor(priority, now)
 	if err := s.rdb.ZAdd(ctx, queueKey(skillGroupID), redis.Z{Score: score, Member: memberFor(callID, now)}).Err(); err != nil {
@@ -131,6 +159,7 @@ func (s *Service) Enqueue(ctx context.Context, callID, skillGroupID int64, prior
 	if err := s.rdb.SAdd(ctx, activeSGKey, skillGroupID).Err(); err != nil {
 		return fmt.Errorf("acd: register sg: %w", err)
 	}
+	metrics.QueueEnqueued.Inc()
 	s.logger.Debug().Int64("call_id", callID).Int64("sg", skillGroupID).Int("priority", priority).Msg("acd: enqueued")
 	return nil
 }
@@ -159,13 +188,22 @@ func (s *Service) tick(ctx context.Context) {
 		s.logger.Warn().Err(err).Msg("acd: list skill groups")
 		return
 	}
+	// Pre-load skill groups once per tick to avoid repeated DB lookups.
+	sgCache := make(map[int64]*identity.SkillGroup, len(sgIDs))
 	for _, raw := range sgIDs {
 		sgID, err := strconv.ParseInt(raw, 10, 64)
 		if err != nil {
 			continue
 		}
-		s.expireQueued(ctx, sgID)
-		s.dispatchOne(ctx, sgID)
+		sg, err := s.skillGroup.GetByID(ctx, sgID)
+		if err != nil || sg == nil {
+			continue
+		}
+		sgCache[sgID] = sg
+	}
+	for sgID, sg := range sgCache {
+		s.expireQueued(ctx, sgID, sg)
+		s.dispatchOne(ctx, sgID, sg)
 	}
 }
 
@@ -177,9 +215,8 @@ func (s *Service) tick(ctx context.Context) {
 // score: the score mixes priority + timestamp in a way that cannot be cleanly
 // decoded for arbitrary priority magnitudes, so we keep wall-clock time
 // authoritative by embedding it in the member.
-func (s *Service) expireQueued(ctx context.Context, sgID int64) {
-	sg, err := s.skillGroup.GetByID(ctx, sgID)
-	if err != nil || sg == nil || sg.MaxWaitSec <= 0 {
+func (s *Service) expireQueued(ctx context.Context, sgID int64, sg *identity.SkillGroup) {
+	if sg.MaxWaitSec <= 0 {
 		return
 	}
 	entries, err := s.rdb.ZRange(ctx, queueKey(sgID), 0, -1).Result()
@@ -205,7 +242,7 @@ func (s *Service) expireQueued(ctx context.Context, sgID int64) {
 		if err != nil || removed == 0 {
 			continue
 		}
-		if _, err := s.lifecycle.EndCall(ctx, callID, call.HangupQueueTimeout); err != nil {
+		if _, err := s.lifecycle.EndCall(ctx, callID, call.HangupQueueTimeout, call.HangupBySystem); err != nil {
 			s.logger.Warn().Err(err).Int64("call_id", callID).Int64("sg", sgID).Msg("acd: queue timeout end call")
 			continue
 		}
@@ -216,7 +253,7 @@ func (s *Service) expireQueued(ctx context.Context, sgID int64) {
 // dispatchOne attempts to assign the head-of-queue call for a skill group to an
 // idle agent. At most one assignment per tick per skill group to keep the loop
 // fair across groups.
-func (s *Service) dispatchOne(ctx context.Context, sgID int64) {
+func (s *Service) dispatchOne(ctx context.Context, sgID int64, sg *identity.SkillGroup) {
 	head, err := s.rdb.ZRangeWithScores(ctx, queueKey(sgID), 0, 0).Result()
 	if err != nil || len(head) == 0 {
 		return
@@ -225,11 +262,6 @@ func (s *Service) dispatchOne(ctx context.Context, sgID int64) {
 	callID, _, ok := parseMember(member)
 	if !ok {
 		_ = s.rdb.ZRem(ctx, queueKey(sgID), head[0].Member).Err()
-		return
-	}
-
-	sg, err := s.skillGroup.GetByID(ctx, sgID)
-	if err != nil || sg == nil {
 		return
 	}
 
@@ -258,6 +290,9 @@ func (s *Service) dispatchOne(ctx context.Context, sgID int64) {
 		_ = s.rdb.ZAdd(ctx, queueKey(sgID), redis.Z{Score: head[0].Score, Member: member}).Err()
 		return
 	}
+	if _, enqueuedAt, ok := parseMember(member); ok && enqueuedAt > 0 {
+		metrics.ACDDispatchLatency.Observe(float64(time.Now().UnixMilli()-enqueuedAt) / 1000.0)
+	}
 	s.logger.Info().Int64("call_id", callID).Int64("agent_id", agentID).Int64("sg", sgID).Msg("acd: routed call to agent")
 }
 
@@ -270,13 +305,23 @@ func (s *Service) pickAgent(ctx context.Context, sg *identity.SkillGroup, callID
 		ID       int64
 		LastIdle time.Time
 	}
+	// Batch-fetch presence to avoid N MySQL round-trips per dispatch.
+	agentIDs := make([]int64, 0, len(members))
+	for _, m := range members {
+		agentIDs = append(agentIDs, m.AgentID)
+	}
+	presences, err := s.presence.GetByAgentIDs(ctx, agentIDs)
+	if err != nil {
+		return 0, err
+	}
+	byAgent := make(map[int64]*identity.AgentPresence, len(presences))
+	for _, p := range presences {
+		byAgent[p.AgentID] = p
+	}
 	var candidates []idleAgent
 	for _, m := range members {
-		p, err := s.presence.GetByAgentID(ctx, m.AgentID)
-		if err != nil || p == nil {
-			continue
-		}
-		if p.Status != identity.PresenceIdle {
+		p := byAgent[m.AgentID]
+		if p == nil || p.Status != identity.PresenceIdle {
 			continue
 		}
 		candidates = append(candidates, idleAgent{ID: m.AgentID, LastIdle: p.LastStatusAt})
@@ -287,7 +332,10 @@ func (s *Service) pickAgent(ctx context.Context, sg *identity.SkillGroup, callID
 
 	switch sg.RoutingPolicy {
 	case identity.RoutingPolicyRandom:
-		return candidates[s.rng.Intn(len(candidates))].ID, nil
+		s.rngMu.Lock()
+		idx := s.rng.Intn(len(candidates))
+		s.rngMu.Unlock()
+		return candidates[idx].ID, nil
 	case identity.RoutingPolicyRoundRobin:
 		idx, err := s.rdb.Incr(ctx, roundRobinPrefix+strconv.FormatInt(sg.ID, 10)).Result()
 		if err != nil {
@@ -347,6 +395,83 @@ func (s *Service) RememberAgent(ctx context.Context, tenantID int64, caller stri
 
 func familiarKey(tenantID int64, caller string) string {
 	return fmt.Sprintf("%s%d:%s", lastAgentPrefix, tenantID, caller)
+}
+
+// GetMediaCapacity returns an agent's capacity across all media types.
+// activeVoice/activeChat/activeEmail are read from Redis counters if available.
+func (s *Service) GetMediaCapacity(ctx context.Context, agentID int64) ([]identity.MediaCapacity, error) {
+	if s.agentLookup == nil {
+		return nil, errors.New("acd: agent lookup not configured")
+	}
+	agent, err := s.agentLookup.GetByID(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+
+	voiceMax := agent.MaxConcurrent
+	if voiceMax == 0 {
+		voiceMax = 1
+	}
+	chatMax := agent.MaxChatSlots
+	if chatMax == 0 {
+		chatMax = 5
+	}
+	emailMax := agent.MaxEmailSlots
+	if emailMax == 0 {
+		emailMax = 10
+	}
+
+	activeVoice := s.readActiveCount(ctx, agentID, "voice")
+	activeChat := s.readActiveCount(ctx, agentID, "chat")
+	activeEmail := s.readActiveCount(ctx, agentID, "email")
+
+	return []identity.MediaCapacity{
+		{Media: identity.MediaTypeVoice, MaxSlots: voiceMax, ActiveSlots: activeVoice},
+		{Media: identity.MediaTypeChat, MaxSlots: chatMax, ActiveSlots: activeChat},
+		{Media: identity.MediaTypeEmail, MaxSlots: emailMax, ActiveSlots: activeEmail},
+	}, nil
+}
+
+// AgentWorkloadSummary aggregates an agent's current workload across all channels.
+type AgentWorkloadSummary struct {
+	AgentID    int64                    `json:"agent_id"`
+	Capacities []identity.MediaCapacity `json:"capacities"`
+	TotalActive int                    `json:"total_active"`
+	TotalMax    int                    `json:"total_max"`
+	Utilization float64                `json:"utilization"` // 0-100
+}
+
+// GetWorkloadSummary returns an agent's multi-channel workload snapshot.
+func (s *Service) GetWorkloadSummary(ctx context.Context, agentID int64) (*AgentWorkloadSummary, error) {
+	caps, err := s.GetMediaCapacity(ctx, agentID)
+	if err != nil {
+		return nil, err
+	}
+	var totalActive, totalMax int
+	for _, c := range caps {
+		totalActive += c.ActiveSlots
+		totalMax += c.MaxSlots
+	}
+	var util float64
+	if totalMax > 0 {
+		util = float64(totalActive) / float64(totalMax) * 100
+	}
+	return &AgentWorkloadSummary{
+		AgentID:     agentID,
+		Capacities:  caps,
+		TotalActive: totalActive,
+		TotalMax:    totalMax,
+		Utilization: util,
+	}, nil
+}
+
+func (s *Service) readActiveCount(ctx context.Context, agentID int64, media string) int {
+	key := fmt.Sprintf("acd:active:%d:%s", agentID, media)
+	val, err := s.rdb.Get(ctx, key).Int()
+	if err != nil {
+		return 0
+	}
+	return val
 }
 
 func (s *Service) tryClaim(ctx context.Context, agentID int64) bool {

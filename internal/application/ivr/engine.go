@@ -19,6 +19,44 @@ type Engine struct {
 // SetASRProvider sets the speech recognition provider for ASR nodes.
 func (e *Engine) SetASRProvider(p ASRProvider) { e.asrProvider = p }
 
+// SetNLUProvider sets the natural language understanding provider for NLU intent routing.
+func (e *Engine) SetNLUProvider(p NLUProvider) {
+	if h, ok := e.handlers[routing.NodeNLU].(*NLUHandler); ok {
+		h.NLU = p
+	}
+}
+
+// SetQueueInspector wires the queue depth provider for QueuePosition nodes.
+func (e *Engine) SetQueueInspector(q QueueInspector) {
+	if h, ok := e.handlers[routing.NodeQueuePosition].(*QueuePositionHandler); ok {
+		h.Queue = q
+	}
+}
+
+// SetSentimentAnalyzer wires the sentiment analysis provider for SentimentGate nodes.
+func (e *Engine) SetSentimentAnalyzer(a SentimentAnalyzer) {
+	if h, ok := e.handlers[routing.NodeSentimentGate].(*SentimentGateHandler); ok {
+		h.Analyzer = a
+	}
+}
+
+// SetCustomerLookup wires the CRM lookup provider for CustomerLookup nodes.
+func (e *Engine) SetCustomerLookup(c CustomerLookupProvider) {
+	if h, ok := e.handlers[routing.NodeCustomerLookup].(*CustomerLookupHandler); ok {
+		h.CRM = c
+	}
+}
+
+
+// SetIVRContextSink rewires the TransferToAgent handler to persist session
+// variables (so the agent screen pop can show the caller's IVR breadcrumbs).
+// Safe to call after DefaultEngine has registered the handler.
+func (e *Engine) SetIVRContextSink(sink IVRContextSink) {
+	if h, ok := e.handlers[routing.NodeTransferToAgent].(*TransferToAgentHandler); ok {
+		h.Context = sink
+	}
+}
+
 // NodeHandler processes a single IVR node and returns the exit name to follow.
 type NodeHandler interface {
 	Handle(ctx context.Context, sess *Session, node routing.FlowNode) (exitName string, err error)
@@ -176,6 +214,10 @@ func DefaultEngine(eslClient *esl.Client, flowLoader FlowLoader, acd ...ACDEnque
 	e.RegisterHandler(routing.NodeSubFlow, &SubFlowHandler{engine: e, flowLoader: flowLoader})
 	e.RegisterHandler(routing.NodeDigitalEmployee, &DigitalEmployeeHandler{})
 	e.RegisterHandler(routing.NodeCallback, &CallbackHandler{})
+	e.RegisterHandler(routing.NodeNLU, &NLUHandler{})
+	e.RegisterHandler(routing.NodeQueuePosition, &QueuePositionHandler{})
+	e.RegisterHandler(routing.NodeSentimentGate, &SentimentGateHandler{})
+	e.RegisterHandler(routing.NodeCustomerLookup, &CustomerLookupHandler{})
 	return e
 }
 

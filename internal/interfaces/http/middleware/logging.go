@@ -31,6 +31,7 @@ func RequestLogger(logger zerolog.Logger) func(http.Handler) http.Handler {
 				Int("status", sw.status).
 				Dur("latency", time.Since(start)).
 				Str("remote", r.RemoteAddr).
+				Str("request_id", RequestIDFromCtx(r.Context())).
 				Msg("request")
 		})
 	}

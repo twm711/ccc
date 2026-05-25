@@ -15,11 +15,19 @@ type ACDEnqueuer interface {
 	Enqueue(ctx context.Context, callID, skillGroupID int64, priority int) error
 }
 
+// IVRContextSink persists the IVR session variables collected during the flow
+// so the agent's screen pop can show what the caller said/pressed before the
+// transfer. Implementations are usually Redis-backed with a short TTL.
+type IVRContextSink interface {
+	Save(ctx context.Context, callID int64, vars map[string]string) error
+}
+
 // TransferToAgentHandler routes the call to a skill group / specific agent.
 // When an ACDEnqueuer is configured it is the source of truth; otherwise the
 // handler falls back to the legacy `callcenter:` dialplan transfer.
 type TransferToAgentHandler struct {
-	ACD ACDEnqueuer
+	ACD     ACDEnqueuer
+	Context IVRContextSink
 }
 
 type transferAgentConfig struct {
@@ -49,6 +57,9 @@ func (h *TransferToAgentHandler) Handle(ctx context.Context, sess *Session, node
 
 	sgID, _ := strconv.ParseInt(cfg.SkillGroupID, 10, 64)
 	if h.ACD != nil && sgID > 0 && sess.CallID > 0 {
+		if h.Context != nil {
+			_ = h.Context.Save(ctx, sess.CallID, sess.Variables)
+		}
 		if err := h.ACD.Enqueue(ctx, sess.CallID, sgID, cfg.QueuePriority); err != nil {
 			sess.Variables["transfer_error"] = err.Error()
 			return "error", nil

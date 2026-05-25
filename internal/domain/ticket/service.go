@@ -204,6 +204,10 @@ func (s *TicketService) List(ctx context.Context, tenantID int64, offset, limit 
 	return s.tickets.List(ctx, tenantID, offset, limit)
 }
 
+func (s *TicketService) ListByCallID(ctx context.Context, callID int64) ([]*Ticket, error) {
+	return s.tickets.ListByCallID(ctx, callID)
+}
+
 func (s *TicketService) Assign(ctx context.Context, ticketID, agentID int64) (*Ticket, error) {
 	tk, err := s.tickets.GetByID(ctx, ticketID)
 	if err != nil || tk == nil {

@@ -27,11 +27,56 @@ func (s *Service) HandleESLEvent(ctx context.Context, ev esl.Event) {
 		}
 		_, _, _ = s.AnswerCall(ctx, c.ID, *c.AgentUserID)
 
+	case "CHANNEL_BRIDGE":
+		if c.Status == call.CallStatusRinging || c.Status == call.CallStatusQueue {
+			_, _ = s.callSvc.TransitionToActive(ctx, c.ID)
+		}
+
+	case "CHANNEL_PARK":
+		if c.Status == call.CallStatusIVR && c.SkillGroupID != nil {
+			_, _ = s.TransitionCallToQueue(ctx, c.ID, *c.SkillGroupID)
+		}
+
 	case "CHANNEL_HANGUP", "CHANNEL_HANGUP_COMPLETE":
 		if c.Status == call.CallStatusCompleted {
 			return
 		}
-		_, _ = s.EndCall(ctx, c.ID, mapHangupCause(ev.HangupCause))
+		reason := mapHangupCause(ev.HangupCause)
+		hangupBy := inferHangupBy(ev, c)
+		_, _ = s.EndCall(ctx, c.ID, reason, hangupBy)
+	}
+}
+
+// inferHangupBy determines who initiated the hangup from ESL event headers
+// and the call direction.
+func inferHangupBy(ev esl.Event, c *call.Call) call.HangupBy {
+	cause := strings.ToUpper(ev.HangupCause)
+	switch cause {
+	case "ORIGINATOR_CANCEL":
+		if c.Direction == call.DirectionInbound {
+			return call.HangupByCustomer
+		}
+		return call.HangupByAgent
+	case "NORMAL_CLEARING":
+		disposition := strings.ToLower(ev.Headers["Hangup-Disposition"])
+		if disposition == "send_bye" {
+			if c.Direction == call.DirectionInbound {
+				return call.HangupByAgent
+			}
+			return call.HangupByCustomer
+		}
+		if disposition == "recv_bye" {
+			if c.Direction == call.DirectionInbound {
+				return call.HangupByCustomer
+			}
+			return call.HangupByAgent
+		}
+		return call.HangupByCustomer
+	case "EXCHANGE_ROUTING_ERROR", "DESTINATION_OUT_OF_ORDER",
+		"RECOVERY_ON_TIMER_EXPIRE", "BEARERCAPABILITY_NOTAVAIL":
+		return call.HangupBySystem
+	default:
+		return call.HangupBySystem
 	}
 }
 

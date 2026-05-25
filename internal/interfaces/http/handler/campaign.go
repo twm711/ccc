@@ -8,6 +8,7 @@ import (
 	"github.com/divord97/ccc/internal/application/dialer"
 	"github.com/divord97/ccc/internal/domain/campaign"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -50,11 +51,7 @@ func (h *CampaignHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *CampaignHandler) List(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 
 	items, total, err := h.svc.List(r.Context(), tenantID, offset, limit)
 	if err != nil {
@@ -153,11 +150,7 @@ func (h *CampaignHandler) ImportCases(w http.ResponseWriter, r *http.Request) {
 
 func (h *CampaignHandler) ListCases(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 
 	items, total, err := h.svc.ListCases(r.Context(), id, offset, limit)
 	if err != nil {
@@ -169,6 +162,33 @@ func (h *CampaignHandler) ListCases(w http.ResponseWriter, r *http.Request) {
 
 func (h *CampaignHandler) Stats(w http.ResponseWriter, r *http.Request) {
 	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	stats := h.dialerSvc.GetStats(id)
-	response.JSON(w, http.StatusOK, stats)
+	d := h.dialerSvc.GetStats(id)
+
+	out := map[string]interface{}{
+		"campaign_id":     d.CampaignID,
+		"mode":            d.Mode,
+		"active_calls":    d.ActiveCalls,
+		"total_dialed":    d.TotalDialed,
+		"connected_calls": d.ConnectedCalls,
+		"connected":       d.ConnectedCalls, // alias
+		"abandon_count":   d.AbandonCount,
+		"abandon_rate":    d.AbandonRate / 100.0, // expose as 0..1 fraction
+		"connect_rate":    d.ConnectRate / 100.0, // expose as 0..1 fraction
+		"is_running":      d.IsRunning,
+		"started_at":      d.StartedAt,
+		"uptime_seconds":  d.UptimeSeconds,
+	}
+	if c, err := h.svc.GetByID(r.Context(), id); err == nil && c != nil {
+		out["total_cases"] = c.TotalCases
+		out["completed"] = c.CompletedCases
+		out["success"] = c.SuccessCases
+		out["failed"] = c.FailedCases
+		out["concurrent"] = c.ConcurrentLimit
+		if d.UptimeSeconds > 0 {
+			out["elapsed_min"] = d.UptimeSeconds / 60
+		} else {
+			out["elapsed_min"] = 0
+		}
+	}
+	response.JSON(w, http.StatusOK, out)
 }

@@ -7,6 +7,8 @@ import (
 
 	"github.com/divord97/ccc/internal/domain/ai"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/redact"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
@@ -199,7 +201,7 @@ func (h *QAHandler) RunInspection(w http.ResponseWriter, r *http.Request) {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := h.svc.RunInspection(r.Context(), tenantID, in.CallID, in.SchemeID, in.Transcript)
+	result, err := h.svc.RunInspection(r.Context(), tenantID, in.CallID, in.SchemeID, redact.Text(in.Transcript))
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
@@ -219,11 +221,7 @@ func (h *QAHandler) GetResult(w http.ResponseWriter, r *http.Request) {
 
 func (h *QAHandler) ListResults(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 	list, err := h.svc.ListResults(r.Context(), tenantID, offset, limit)
 	if err != nil {
 		response.Error(w, http.StatusInternalServerError, err.Error())

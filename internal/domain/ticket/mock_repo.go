@@ -137,6 +137,18 @@ func (r *MockTicketRepo) List(_ context.Context, tenantID int64, offset, limit i
 	return result[offset:end], nil
 }
 
+func (r *MockTicketRepo) ListByCallID(_ context.Context, callID int64) ([]*Ticket, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var result []*Ticket
+	for _, t := range r.data {
+		if t.CallID != nil && *t.CallID == callID {
+			result = append(result, t)
+		}
+	}
+	return result, nil
+}
+
 type MockCommentRepo struct {
 	mu   sync.RWMutex
 	data map[int64]*TicketComment

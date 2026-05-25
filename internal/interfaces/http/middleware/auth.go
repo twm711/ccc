@@ -22,6 +22,7 @@ type Claims struct {
 	TenantID int64  `json:"tenant_id"`
 	UserID   int64  `json:"user_id"`
 	Role     string `json:"role"`
+	Type     string `json:"type"`
 }
 
 func Auth(secret string) func(http.Handler) http.Handler {
@@ -40,6 +41,12 @@ func Auth(secret string) func(http.Handler) http.Handler {
 			})
 			if err != nil || !token.Valid {
 				response.Error(w, http.StatusUnauthorized, "invalid token")
+				return
+			}
+
+			// Reject refresh tokens used as Bearer tokens.
+			if claims.Type == "refresh" {
+				response.Error(w, http.StatusUnauthorized, "refresh token cannot be used for API access")
 				return
 			}
 

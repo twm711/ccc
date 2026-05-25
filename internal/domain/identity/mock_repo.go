@@ -382,6 +382,18 @@ func (r *MockAgentPresenceRepo) GetByAgentID(_ context.Context, agentID int64) (
 	return r.data[agentID], nil
 }
 
+func (r *MockAgentPresenceRepo) GetByAgentIDs(_ context.Context, agentIDs []int64) ([]*AgentPresence, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]*AgentPresence, 0, len(agentIDs))
+	for _, id := range agentIDs {
+		if p := r.data[id]; p != nil {
+			out = append(out, p)
+		}
+	}
+	return out, nil
+}
+
 func (r *MockAgentPresenceRepo) ListByTenant(_ context.Context, tenantID int64) ([]*AgentPresence, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

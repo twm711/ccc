@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,9 +12,12 @@ import (
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/internal/domain/integration"
 	"github.com/divord97/ccc/internal/interfaces/http/middleware"
+	"github.com/divord97/ccc/pkg/pagination"
 	"github.com/divord97/ccc/pkg/response"
 	"github.com/go-chi/chi/v5"
 )
+
+const maxExportRows = 10000
 
 type CallHandler struct {
 	callSvc    *call.CallService
@@ -26,11 +31,7 @@ func NewCallHandler(callSvc *call.CallService, outboundSvc *outbound.Service, ta
 
 func (h *CallHandler) List(w http.ResponseWriter, r *http.Request) {
 	tenantID := middleware.TenantIDFromCtx(r.Context())
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	if limit <= 0 {
-		limit = 20
-	}
+	limit, offset := pagination.ParseLimitOffset(r, 20, 200)
 
 	filter := call.CallListFilter{
 		Caller: r.URL.Query().Get("caller"),
@@ -70,6 +71,134 @@ func (h *CallHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response.JSON(w, http.StatusOK, map[string]interface{}{"items": calls, "total": total})
+}
+
+// Export streams call records as CSV. Accepts the same filter query params as
+// List. Capped at maxExportRows to avoid OOM — callers needing more should
+// page using cursor APIs and stitch client-side.
+func (h *CallHandler) Export(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	filter := call.CallListFilter{
+		Caller: r.URL.Query().Get("caller"),
+		Callee: r.URL.Query().Get("callee"),
+	}
+	if d := r.URL.Query().Get("direction"); d != "" {
+		dir := call.CallDirection(d)
+		filter.Direction = &dir
+	}
+	if ct := r.URL.Query().Get("call_type"); ct != "" {
+		callType := call.CallType(ct)
+		filter.CallType = &callType
+	}
+	if s := r.URL.Query().Get("status"); s != "" {
+		status := call.CallStatus(s)
+		filter.Status = &status
+	}
+	if sf := r.URL.Query().Get("start_from"); sf != "" {
+		if t, err := time.Parse(time.RFC3339, sf); err == nil {
+			filter.StartFrom = &t
+		}
+	}
+	if st := r.URL.Query().Get("start_to"); st != "" {
+		if t, err := time.Parse(time.RFC3339, st); err == nil {
+			filter.StartTo = &t
+		}
+	}
+
+	calls, _, err := h.callSvc.ListCalls(r.Context(), tenantID, filter, 0, maxExportRows)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="calls_%s.csv"`, time.Now().Format("20060102_150405")))
+	// UTF-8 BOM so Excel renders Chinese correctly.
+	_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF})
+
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{
+		"id", "direction", "call_type", "caller", "callee", "status",
+		"agent_user_id", "skill_group_id", "started_at", "answered_at", "ended_at",
+		"duration_sec", "ring_duration_sec", "queue_duration_sec", "hangup_reason",
+	})
+	for _, c := range calls {
+		var agent, sg, answered, ended, hangup string
+		if c.AgentUserID != nil {
+			agent = strconv.FormatInt(*c.AgentUserID, 10)
+		}
+		if c.SkillGroupID != nil {
+			sg = strconv.FormatInt(*c.SkillGroupID, 10)
+		}
+		if c.AnsweredAt != nil {
+			answered = c.AnsweredAt.Format(time.RFC3339)
+		}
+		if c.EndedAt != nil {
+			ended = c.EndedAt.Format(time.RFC3339)
+		}
+		if c.HangupReason != nil {
+			hangup = string(*c.HangupReason)
+		}
+		_ = cw.Write([]string{
+			strconv.FormatInt(c.ID, 10),
+			string(c.Direction),
+			string(c.CallType),
+			c.Caller,
+			c.Callee,
+			string(c.Status),
+			agent, sg,
+			c.StartedAt.Format(time.RFC3339),
+			answered, ended,
+			strconv.Itoa(c.DurationSec),
+			strconv.Itoa(c.RingDurationSec),
+			strconv.Itoa(c.QueueDurationSec),
+			hangup,
+		})
+	}
+	cw.Flush()
+}
+
+func (h *CallHandler) ListCursor(w http.ResponseWriter, r *http.Request) {
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	cursor, _ := strconv.ParseInt(r.URL.Query().Get("cursor"), 10, 64)
+	limit, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+
+	filter := call.CallListFilter{
+		Caller: r.URL.Query().Get("caller"),
+		Callee: r.URL.Query().Get("callee"),
+	}
+	if d := r.URL.Query().Get("direction"); d != "" {
+		dir := call.CallDirection(d)
+		filter.Direction = &dir
+	}
+	if s := r.URL.Query().Get("status"); s != "" {
+		status := call.CallStatus(s)
+		filter.Status = &status
+	}
+	if sf := r.URL.Query().Get("start_from"); sf != "" {
+		if t, err := time.Parse(time.RFC3339, sf); err == nil {
+			filter.StartFrom = &t
+		}
+	}
+	if st := r.URL.Query().Get("start_to"); st != "" {
+		if t, err := time.Parse(time.RFC3339, st); err == nil {
+			filter.StartTo = &t
+		}
+	}
+
+	calls, err := h.callSvc.ListCallsWithCursor(r.Context(), tenantID, filter, cursor, limit)
+	if err != nil {
+		response.Error(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	var nextCursor int64
+	if len(calls) == limit {
+		nextCursor = calls[len(calls)-1].ID
+	}
+	response.JSON(w, http.StatusOK, map[string]interface{}{"items": calls, "next_cursor": nextCursor})
 }
 
 func (h *CallHandler) Get(w http.ResponseWriter, r *http.Request) {

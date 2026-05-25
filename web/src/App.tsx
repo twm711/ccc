@@ -1,55 +1,61 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
-import { ConfigProvider } from 'antd';
+import { ConfigProvider, Spin } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import { lazy, Suspense } from 'react';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import AppLayout from './components/layout/AppLayout';
 import Login from './pages/Login';
-import DashboardPage from './pages/dashboard/DashboardPage';
-import MyWorkbenchPage from './pages/dashboard/MyWorkbenchPage';
-import AgentListPage from './pages/agents/AgentListPage';
-import SkillGroupPage from './pages/skill-groups/SkillGroupPage';
-import TenantListPage from './pages/tenants/TenantListPage';
-import IvrFlowListPage from './pages/ivr/IvrFlowListPage';
-import PhoneNumberPage from './pages/phone-numbers/PhoneNumberPage';
-import CallRecordPage from './pages/call-records/CallRecordPage';
-import VoicemailPage from './pages/voicemails/VoicemailPage';
-import CampaignPage from './pages/campaigns/CampaignPage';
-import ImSessionPage from './pages/im/ImSessionPage';
-import ImChannelPage from './pages/im/ImChannelPage';
-import CustomerPage from './pages/crm/CustomerPage';
-import TicketListPage from './pages/tickets/TicketListPage';
-import TicketTemplatePage from './pages/tickets/TicketTemplatePage';
-import KnowledgePage from './pages/ai/KnowledgePage';
-import DigitalEmployeePage from './pages/ai/DigitalEmployeePage';
-import QaPage from './pages/ai/QaPage';
-import AsrHotwordsPage from './pages/ai/AsrHotwordsPage';
-import PerformancePage from './pages/ai/PerformancePage';
-import AnnotationPage from './pages/ai/AnnotationPage';
-import LlmModelPage from './pages/ai/LlmModelPage';
-import AdvancedAiPage from './pages/ai/AdvancedAiPage';
-import AgentReportPage from './pages/reports/AgentReportPage';
-import GroupAgentReportPage from './pages/reports/GroupAgentReportPage';
-import SkillGroupReportPage from './pages/reports/SkillGroupReportPage';
-import B2BReportPage from './pages/reports/B2BReportPage';
-import InternalCallReportPage from './pages/reports/InternalCallReportPage';
-import StatusLogPage from './pages/reports/StatusLogPage';
-import CsatReportPage from './pages/reports/CsatReportPage';
-import CampaignReportPage from './pages/reports/CampaignReportPage';
-import TenantSettingsPage from './pages/settings/TenantSettingsPage';
-import BreakReasonsPage from './pages/settings/BreakReasonsPage';
-import DispositionCodesPage from './pages/settings/DispositionCodesPage';
-import BusinessHoursPage from './pages/settings/BusinessHoursPage';
-import CustomFieldsPage from './pages/settings/CustomFieldsPage';
-import CallTagsPage from './pages/settings/CallTagsPage';
-import ScreenPopPage from './pages/settings/ScreenPopPage';
-import WebhookPage from './pages/settings/WebhookPage';
-import SmsConfigPage from './pages/settings/SmsConfigPage';
-import QuickRepliesPage from './pages/settings/QuickRepliesPage';
-import CsatConfigPage from './pages/settings/CsatConfigPage';
-import AudioFilesPage from './pages/settings/AudioFilesPage';
-import AuditLogPage from './pages/settings/AuditLogPage';
-import SocialChannelPage from './pages/im/SocialChannelPage';
-import CampaignLiveDashboard from './pages/campaigns/CampaignLiveDashboard';
 import { useAuthStore } from './stores/auth';
+
+// Lazy-load every route page. Without this every chunk lands in the
+// initial bundle, which makes the first paint slow especially on first
+// login. React.lazy + Suspense splits each page into its own chunk.
+const DashboardPage = lazy(() => import('./pages/dashboard/DashboardPage'));
+const MyWorkbenchPage = lazy(() => import('./pages/dashboard/MyWorkbenchPage'));
+const AgentListPage = lazy(() => import('./pages/agents/AgentListPage'));
+const SkillGroupPage = lazy(() => import('./pages/skill-groups/SkillGroupPage'));
+const TenantListPage = lazy(() => import('./pages/tenants/TenantListPage'));
+const IvrFlowListPage = lazy(() => import('./pages/ivr/IvrFlowListPage'));
+const PhoneNumberPage = lazy(() => import('./pages/phone-numbers/PhoneNumberPage'));
+const CallRecordPage = lazy(() => import('./pages/call-records/CallRecordPage'));
+const VoicemailPage = lazy(() => import('./pages/voicemails/VoicemailPage'));
+const CampaignPage = lazy(() => import('./pages/campaigns/CampaignPage'));
+const ImSessionPage = lazy(() => import('./pages/im/ImSessionPage'));
+const ImChannelPage = lazy(() => import('./pages/im/ImChannelPage'));
+const CustomerPage = lazy(() => import('./pages/crm/CustomerPage'));
+const TicketListPage = lazy(() => import('./pages/tickets/TicketListPage'));
+const TicketTemplatePage = lazy(() => import('./pages/tickets/TicketTemplatePage'));
+const KnowledgePage = lazy(() => import('./pages/ai/KnowledgePage'));
+const DigitalEmployeePage = lazy(() => import('./pages/ai/DigitalEmployeePage'));
+const QaPage = lazy(() => import('./pages/ai/QaPage'));
+const AsrHotwordsPage = lazy(() => import('./pages/ai/AsrHotwordsPage'));
+const PerformancePage = lazy(() => import('./pages/ai/PerformancePage'));
+const AnnotationPage = lazy(() => import('./pages/ai/AnnotationPage'));
+const LlmModelPage = lazy(() => import('./pages/ai/LlmModelPage'));
+const AdvancedAiPage = lazy(() => import('./pages/ai/AdvancedAiPage'));
+const AgentReportPage = lazy(() => import('./pages/reports/AgentReportPage'));
+const GroupAgentReportPage = lazy(() => import('./pages/reports/GroupAgentReportPage'));
+const SkillGroupReportPage = lazy(() => import('./pages/reports/SkillGroupReportPage'));
+const B2BReportPage = lazy(() => import('./pages/reports/B2BReportPage'));
+const InternalCallReportPage = lazy(() => import('./pages/reports/InternalCallReportPage'));
+const StatusLogPage = lazy(() => import('./pages/reports/StatusLogPage'));
+const CsatReportPage = lazy(() => import('./pages/reports/CsatReportPage'));
+const CampaignReportPage = lazy(() => import('./pages/reports/CampaignReportPage'));
+const TenantSettingsPage = lazy(() => import('./pages/settings/TenantSettingsPage'));
+const BreakReasonsPage = lazy(() => import('./pages/settings/BreakReasonsPage'));
+const DispositionCodesPage = lazy(() => import('./pages/settings/DispositionCodesPage'));
+const BusinessHoursPage = lazy(() => import('./pages/settings/BusinessHoursPage'));
+const CustomFieldsPage = lazy(() => import('./pages/settings/CustomFieldsPage'));
+const CallTagsPage = lazy(() => import('./pages/settings/CallTagsPage'));
+const ScreenPopPage = lazy(() => import('./pages/settings/ScreenPopPage'));
+const WebhookPage = lazy(() => import('./pages/settings/WebhookPage'));
+const SmsConfigPage = lazy(() => import('./pages/settings/SmsConfigPage'));
+const QuickRepliesPage = lazy(() => import('./pages/settings/QuickRepliesPage'));
+const CsatConfigPage = lazy(() => import('./pages/settings/CsatConfigPage'));
+const AudioFilesPage = lazy(() => import('./pages/settings/AudioFilesPage'));
+const AuditLogPage = lazy(() => import('./pages/settings/AuditLogPage'));
+const SocialChannelPage = lazy(() => import('./pages/im/SocialChannelPage'));
+const CampaignLiveDashboard = lazy(() => import('./pages/campaigns/CampaignLiveDashboard'));
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { token } = useAuthStore();
@@ -57,10 +63,18 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const Loading = () => (
+  <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 300 }}>
+    <Spin size="large" />
+  </div>
+);
+
 export default function App() {
   return (
+    <ErrorBoundary>
     <ConfigProvider locale={zhCN}>
       <BrowserRouter>
+        <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/" element={<ProtectedRoute><AppLayout /></ProtectedRoute>}>
@@ -123,7 +137,9 @@ export default function App() {
             <Route path="audit-logs" element={<AuditLogPage />} />
           </Route>
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </ConfigProvider>
+    </ErrorBoundary>
   );
 }

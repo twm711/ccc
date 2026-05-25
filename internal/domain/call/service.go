@@ -124,7 +124,7 @@ func (s *CallService) RecordIVRTracking(ctx context.Context, t *IVRTracking) err
 	return s.tracking.Create(ctx, t)
 }
 
-func (s *CallService) EndCall(ctx context.Context, id int64, reason HangupReason) (*Call, error) {
+func (s *CallService) EndCall(ctx context.Context, id int64, reason HangupReason, hangupBy ...HangupBy) (*Call, error) {
 	c, err := s.calls.GetByID(ctx, id)
 	if err != nil || c == nil {
 		return nil, ErrCallNotFound
@@ -136,6 +136,9 @@ func (s *CallService) EndCall(ctx context.Context, id int64, reason HangupReason
 	now := time.Now()
 	c.Status = CallStatusCompleted
 	c.HangupReason = &reason
+	if len(hangupBy) > 0 {
+		c.HangupBy = &hangupBy[0]
+	}
 	c.EndedAt = &now
 	c.DurationSec = int(now.Sub(c.StartedAt).Seconds())
 
@@ -315,6 +318,35 @@ func (s *CallService) TransitionToRinging(ctx context.Context, id int64, agentUs
 	return c, nil
 }
 
+// TransitionToActive moves a call from Ringing or Queue to Active status
+// when a CHANNEL_BRIDGE event indicates the media path is established.
+func (s *CallService) TransitionToActive(ctx context.Context, id int64) (*Call, error) {
+	c, err := s.calls.GetByID(ctx, id)
+	if err != nil || c == nil {
+		return nil, ErrCallNotFound
+	}
+	if c.Status != CallStatusRinging && c.Status != CallStatusQueue {
+		return nil, ErrCallNotActive
+	}
+
+	now := time.Now()
+	c.Status = CallStatusActive
+	if c.AnsweredAt == nil {
+		c.AnsweredAt = &now
+	}
+	c.RingDurationSec = int(now.Sub(c.StartedAt).Seconds()) - c.QueueDurationSec - c.IVRDurationSec
+
+	if err := s.calls.Update(ctx, c); err != nil {
+		return nil, err
+	}
+
+	_ = s.events.Create(ctx, &CallEvent{
+		ID: snowflake.NextID(), CallID: c.ID, TenantID: c.TenantID,
+		Event: "call_bridged", Detail: "media_path_established", CreatedAt: now,
+	})
+	return c, nil
+}
+
 // AnswerCall marks a call as answered by an agent.
 func (s *CallService) AnswerCall(ctx context.Context, id int64, agentUserID int64) (*Call, error) {
 	c, err := s.calls.GetByID(ctx, id)
@@ -356,6 +388,11 @@ func (s *CallService) FindByChannelUUID(ctx context.Context, channelUUID string)
 // ListCalls returns calls with optional filtering.
 func (s *CallService) ListCalls(ctx context.Context, tenantID int64, filter CallListFilter, offset, limit int) ([]*Call, int64, error) {
 	return s.calls.ListWithFilter(ctx, tenantID, filter, offset, limit)
+}
+
+// ListCallsWithCursor uses keyset pagination for efficient deep paging.
+func (s *CallService) ListCallsWithCursor(ctx context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error) {
+	return s.calls.ListWithCursor(ctx, tenantID, filter, cursor, limit)
 }
 
 func (s *CallService) GetIVRTracking(ctx context.Context, callID int64) ([]*IVRTracking, error) {
@@ -832,6 +869,16 @@ func (s *CallService) ListEvents(ctx context.Context, callID int64) ([]*CallEven
 
 // UpdateDurations persists computed IVR/queue/ring durations back to the call record.
 func (s *CallService) UpdateDurations(ctx context.Context, c *Call) error {
+	return s.calls.Update(ctx, c)
+}
+
+// UpdateCustomerID links a call to a CRM customer.
+func (s *CallService) UpdateCustomerID(ctx context.Context, callID, customerID int64) error {
+	c, err := s.calls.GetByID(ctx, callID)
+	if err != nil || c == nil {
+		return fmt.Errorf("call %d not found", callID)
+	}
+	c.CustomerID = &customerID
 	return s.calls.Update(ctx, c)
 }
 
