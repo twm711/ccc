@@ -180,3 +180,14 @@ type AgentPresenceLog struct {
 	DurationSec     int                 `db:"duration_sec" json:"duration_sec"`
 	CreatedAt       time.Time           `db:"created_at" json:"created_at"`
 }
+
+// AgentShiftLog records check-in/check-out sessions per day.
+type AgentShiftLog struct {
+	ID             int64      `db:"id" json:"id"`
+	TenantID       int64      `db:"tenant_id" json:"tenant_id"`
+	AgentID        int64      `db:"agent_id" json:"agent_id"`
+	ShiftDate      string     `db:"shift_date" json:"shift_date"`
+	CheckInAt      time.Time  `db:"check_in_at" json:"check_in_at"`
+	CheckOutAt     *time.Time `db:"check_out_at" json:"check_out_at,omitempty"`
+	TotalOnlineSec int        `db:"total_online_sec" json:"total_online_sec"`
+}

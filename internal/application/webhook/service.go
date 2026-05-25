@@ -24,6 +24,7 @@ type Service struct {
 	client   *http.Client
 	logger   zerolog.Logger
 	maxRetry int
+	sem      chan struct{}
 }
 
 func NewService(configs integration.WebhookConfigRepository, logs integration.WebhookDeliveryLogRepository, logger zerolog.Logger) *Service {
@@ -33,6 +34,7 @@ func NewService(configs integration.WebhookConfigRepository, logs integration.We
 		client:   &http.Client{Timeout: 10 * time.Second},
 		logger:   logger,
 		maxRetry: 3,
+		sem:      make(chan struct{}, 50),
 	}
 }
 
@@ -57,7 +59,12 @@ func (s *Service) Deliver(ctx context.Context, evt Event) {
 		if !s.matchesEvent(cfg.Events, evt.Type) {
 			continue
 		}
-		go s.deliverToConfig(context.Background(), cfg, evt.Type, payloadBytes)
+		cfg := cfg // capture loop variable
+		go func() {
+			s.sem <- struct{}{}
+			defer func() { <-s.sem }()
+			s.deliverToConfig(context.Background(), cfg, evt.Type, payloadBytes)
+		}()
 	}
 }
 

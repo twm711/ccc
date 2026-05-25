@@ -163,6 +163,22 @@ func (r *CallRepo) ListWithCursor(ctx context.Context, tenantID int64, filter ca
 	return calls, err
 }
 
+func (r *CallRepo) CountTodayByTenant(ctx context.Context, tenantID int64) (total, inbound, outbound, answered, abandoned, active, queued int, err error) {
+	row := r.db.QueryRowContext(ctx,
+		`SELECT
+			COUNT(*) AS total,
+			SUM(CASE WHEN direction='inbound' THEN 1 ELSE 0 END) AS inbound,
+			SUM(CASE WHEN direction='outbound' THEN 1 ELSE 0 END) AS outbound,
+			SUM(CASE WHEN answered_at IS NOT NULL THEN 1 ELSE 0 END) AS answered,
+			SUM(CASE WHEN hangup_reason='abandon' THEN 1 ELSE 0 END) AS abandoned,
+			SUM(CASE WHEN status IN ('active','ringing') THEN 1 ELSE 0 END) AS active,
+			SUM(CASE WHEN status='queue' THEN 1 ELSE 0 END) AS queued
+		 FROM calls
+		 WHERE tenant_id = ? AND started_at >= CURDATE()`, tenantID)
+	err = row.Scan(&total, &inbound, &outbound, &answered, &abandoned, &active, &queued)
+	return
+}
+
 // CallEventRepo
 
 type CallEventRepo struct {

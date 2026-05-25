@@ -324,12 +324,9 @@ func (s *Service) RecordCallResult(ctx context.Context, campaignID, caseID int64
 	}
 }
 
-// isWithinSchedule checks if current time falls within campaign's allowed schedule.
+// isWithinSchedule checks if current time falls within campaign's allowed schedule
+// (both day-of-week and hour-of-day). Default hours are 09:00-20:00 per MIIT compliance.
 func (s *Service) isWithinSchedule(c *campaign.Campaign) bool {
-	if c.ScheduleDays == "" {
-		return true
-	}
-
 	now := time.Now()
 	if c.Timezone != "" {
 		if loc, err := time.LoadLocation(c.Timezone); err == nil {
@@ -337,8 +334,21 @@ func (s *Service) isWithinSchedule(c *campaign.Campaign) bool {
 		}
 	}
 
-	weekday := strings.ToLower(now.Weekday().String())
-	if !strings.Contains(strings.ToLower(c.ScheduleDays), weekday) {
+	if c.ScheduleDays != "" {
+		weekday := strings.ToLower(now.Weekday().String())
+		if !strings.Contains(strings.ToLower(c.ScheduleDays), weekday) {
+			return false
+		}
+	}
+
+	startHour := c.ScheduleStartHour
+	endHour := c.ScheduleEndHour
+	if startHour == 0 && endHour == 0 {
+		startHour = 9
+		endHour = 20
+	}
+	hour := now.Hour()
+	if hour < startHour || hour >= endHour {
 		return false
 	}
 	return true

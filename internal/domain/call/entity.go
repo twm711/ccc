@@ -108,6 +108,7 @@ type Call struct {
 	SIPTrunkID          *int64          `db:"sip_trunk_id" json:"sip_trunk_id,omitempty"`
 	ParentCallID        *int64          `db:"parent_call_id" json:"parent_call_id,omitempty"`
 	CampaignCaseID      *int64          `db:"campaign_case_id" json:"campaign_case_id,omitempty"`
+	CustomerID          *int64          `db:"customer_id" json:"customer_id,omitempty"`
 	Status              CallStatus      `db:"status" json:"status"`
 	HangupReason        *HangupReason   `db:"hangup_reason" json:"hangup_reason,omitempty"`
 	HangupBy            *HangupBy       `db:"hangup_by" json:"hangup_by,omitempty"`
@@ -152,19 +153,21 @@ type IVRTracking struct {
 }
 
 type Recording struct {
-	ID          int64     `db:"id" json:"id"`
-	TenantID    int64     `db:"tenant_id" json:"tenant_id"`
-	CallID      int64     `db:"call_id" json:"call_id"`
-	AgentUserID *int64    `db:"agent_user_id" json:"agent_user_id,omitempty"`
-	FileName    string    `db:"file_name" json:"file_name"`
-	FilePath    string    `db:"file_path" json:"file_path"`
-	FileSize    int64     `db:"file_size" json:"file_size"`
-	DurationSec int      `db:"duration_sec" json:"duration_sec"`
-	MimeType    string    `db:"mime_type" json:"mime_type"`
-	StorageTier string   `db:"storage_tier" json:"storage_tier"`
-	Consent     bool      `db:"consent" json:"consent"`
-	Status      string    `db:"status" json:"status"`
-	CreatedAt   time.Time `db:"created_at" json:"created_at"`
+	ID              int64     `db:"id" json:"id"`
+	TenantID        int64     `db:"tenant_id" json:"tenant_id"`
+	CallID          int64     `db:"call_id" json:"call_id"`
+	AgentUserID     *int64    `db:"agent_user_id" json:"agent_user_id,omitempty"`
+	FileName        string    `db:"file_name" json:"file_name"`
+	FilePath        string    `db:"file_path" json:"file_path"`
+	FileSize        int64     `db:"file_size" json:"file_size"`
+	DurationSec     int       `db:"duration_sec" json:"duration_sec"`
+	MimeType        string    `db:"mime_type" json:"mime_type"`
+	StorageTier     string    `db:"storage_tier" json:"storage_tier"`
+	Consent         bool      `db:"consent" json:"consent"`
+	Status          string    `db:"status" json:"status"`
+	EncryptionAlgo  string    `db:"encryption_algo" json:"encryption_algo,omitempty"`
+	EncryptionKeyID string    `db:"encryption_key_id" json:"encryption_key_id,omitempty"`
+	CreatedAt       time.Time `db:"created_at" json:"created_at"`
 }
 
 type QueueSnapshot struct {

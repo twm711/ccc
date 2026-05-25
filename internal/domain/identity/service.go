@@ -354,6 +354,7 @@ func (s *SkillGroupService) GetMembers(ctx context.Context, skillGroupID int64) 
 type AgentPresenceService struct {
 	presence    AgentPresenceRepository
 	logs        AgentPresenceLogRepository
+	shifts      AgentShiftLogRepository
 	acwTimers   map[int64]func()
 	acwResolver func(ctx context.Context, tenantID, agentID int64) int
 	mu          sync.Mutex
@@ -361,6 +362,11 @@ type AgentPresenceService struct {
 
 func NewAgentPresenceService(pr AgentPresenceRepository, lr AgentPresenceLogRepository) *AgentPresenceService {
 	return &AgentPresenceService{presence: pr, logs: lr, acwTimers: make(map[int64]func())}
+}
+
+// SetShiftLogRepo wires the shift log repository for check-in/check-out auditing.
+func (s *AgentPresenceService) SetShiftLogRepo(r AgentShiftLogRepository) {
+	s.shifts = r
 }
 
 // SetACWResolver wires a callback that returns the effective ACW seconds for
@@ -408,6 +414,15 @@ func (s *AgentPresenceService) CheckIn(ctx context.Context, tenantID, agentID in
 	if err := s.presence.Upsert(ctx, p); err != nil {
 		return nil, err
 	}
+	if s.shifts != nil {
+		_ = s.shifts.Create(ctx, &AgentShiftLog{
+			ID:        snowflake.NextID(),
+			TenantID:  tenantID,
+			AgentID:   agentID,
+			ShiftDate: now.Format("2006-01-02"),
+			CheckInAt: now,
+		})
+	}
 	return p, nil
 }
 
@@ -417,11 +432,18 @@ func (s *AgentPresenceService) CheckOut(ctx context.Context, agentID int64) erro
 		return ErrPresenceNotFound
 	}
 	s.logTransition(ctx, p)
+	now := time.Now()
+	if s.shifts != nil {
+		if shift, err := s.shifts.GetOpenShift(ctx, agentID); err == nil && shift != nil {
+			dur := int(now.Sub(shift.CheckInAt).Seconds())
+			_ = s.shifts.EndShift(ctx, shift.ID, now, dur)
+		}
+	}
 	p.Status = PresenceOffline
 	p.SubState = SubStateNone
 	p.CurrentCallID = nil
-	p.UpdatedAt = time.Now()
-	p.LastStatusAt = p.UpdatedAt
+	p.UpdatedAt = now
+	p.LastStatusAt = now
 	return s.presence.Upsert(ctx, p)
 }
 
@@ -546,6 +568,31 @@ func (s *AgentPresenceService) scheduleACWTimeout(agentID int64, seconds int) {
 		delete(s.acwTimers, agentID)
 		s.mu.Unlock()
 	}()
+}
+
+// ResetGhostAgents scans agents stuck in talking/dialing longer than maxDuration
+// and resets them to idle. Returns the number of agents reset.
+func (s *AgentPresenceService) ResetGhostAgents(ctx context.Context, tenantID int64, maxDuration time.Duration) (int, error) {
+	presences, err := s.presence.ListByTenant(ctx, tenantID)
+	if err != nil {
+		return 0, err
+	}
+	var resetCount int
+	now := time.Now()
+	for _, p := range presences {
+		if (p.Status == PresenceTalking || p.Status == PresenceDialing) && now.Sub(p.LastStatusAt) > maxDuration {
+			s.logTransition(ctx, p)
+			p.Status = PresenceIdle
+			p.SubState = SubStateNone
+			p.CurrentCallID = nil
+			p.UpdatedAt = now
+			p.LastStatusAt = now
+			if err := s.presence.Upsert(ctx, p); err == nil {
+				resetCount++
+			}
+		}
+	}
+	return resetCount, nil
 }
 
 func (s *AgentPresenceService) GetPresence(ctx context.Context, agentID int64) (*AgentPresence, error) {

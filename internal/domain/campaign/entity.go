@@ -49,6 +49,8 @@ type Campaign struct {
 	RetryIntervalSec  int            `db:"retry_interval_sec" json:"retry_interval_sec"`
 	Timezone          string         `db:"timezone" json:"timezone"`
 	ScheduleDays      string         `db:"schedule_days" json:"schedule_days"`
+	ScheduleStartHour int            `db:"schedule_start_hour" json:"schedule_start_hour"`
+	ScheduleEndHour   int            `db:"schedule_end_hour" json:"schedule_end_hour"`
 	TotalCases        int            `db:"total_cases" json:"total_cases"`
 	CompletedCases    int            `db:"completed_cases" json:"completed_cases"`
 	SuccessCases      int            `db:"success_cases" json:"success_cases"`

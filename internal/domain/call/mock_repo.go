@@ -107,6 +107,35 @@ func (r *MockCallRepo) ListWithCursor(_ context.Context, tenantID int64, filter 
 	return filtered, nil
 }
 
+func (r *MockCallRepo) CountTodayByTenant(_ context.Context, tenantID int64) (total, inbound, outbound, answered, abandoned, active, queued int, err error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, c := range r.calls {
+		if c.TenantID != tenantID {
+			continue
+		}
+		total++
+		if c.Direction == DirectionInbound {
+			inbound++
+		} else {
+			outbound++
+		}
+		if c.AnsweredAt != nil {
+			answered++
+		}
+		if c.HangupReason != nil && *c.HangupReason == HangupAbandon {
+			abandoned++
+		}
+		if c.Status == CallStatusActive || c.Status == CallStatusRinging {
+			active++
+		}
+		if c.Status == CallStatusQueue {
+			queued++
+		}
+	}
+	return
+}
+
 type MockCallEventRepo struct {
 	mu     sync.RWMutex
 	events []*CallEvent

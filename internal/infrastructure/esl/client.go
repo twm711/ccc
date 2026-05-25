@@ -386,6 +386,27 @@ func (c *Client) FlashSMS(ctx context.Context, from, to, message string) error {
 	return err
 }
 
+// StartHealthCheck periodically sends a status command to verify ESL connectivity.
+func (c *Client) StartHealthCheck(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if atomic.LoadInt32(&c.closed) == 1 {
+				return
+			}
+			checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			if _, err := c.SendCommand(checkCtx, "api status"); err != nil {
+				c.logger.Warn().Err(err).Msg("esl health check: ping failed")
+			}
+			cancel()
+		}
+	}
+}
+
 func (c *Client) Close() {
 	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
 		return

@@ -125,10 +125,14 @@ func (s *Service) Enqueue(ctx context.Context, callID, skillGroupID int64, prior
 		return errors.New("acd: redis client not configured")
 	}
 
-	// Check max_queue_size before enqueuing.
+	// Check max_queue_size before enqueuing; overflow to backup group when possible.
 	if sg, err := s.skillGroup.GetByID(ctx, skillGroupID); err == nil && sg != nil && sg.MaxQueueSize > 0 {
 		qLen, _ := s.rdb.ZCard(ctx, queueKey(skillGroupID)).Result()
 		if qLen >= int64(sg.MaxQueueSize) {
+			if sg.OverflowGroup != nil {
+				s.logger.Info().Int64("call_id", callID).Int64("from_sg", skillGroupID).Int64("to_sg", *sg.OverflowGroup).Msg("acd: queue full, overflowing to backup group")
+				return s.Enqueue(ctx, callID, *sg.OverflowGroup, priority)
+			}
 			s.logger.Warn().Int64("call_id", callID).Int64("sg", skillGroupID).Int("max", sg.MaxQueueSize).Msg("acd: queue full, rejecting")
 			metrics.QueueRejected.Inc()
 			return fmt.Errorf("acd: queue full for skill group %d (max %d)", skillGroupID, sg.MaxQueueSize)

@@ -47,6 +47,11 @@ type FamiliarAgentRecorder interface {
 	RememberAgent(ctx context.Context, tenantID int64, caller string, agentUserID int64, ttlDays int)
 }
 
+// QAAutoTrigger runs quality inspection after a call ends.
+type QAAutoTrigger interface {
+	AutoInspect(ctx context.Context, tenantID, callID int64)
+}
+
 // Service orchestrates cross-domain side effects for call lifecycle events.
 type Service struct {
 	callSvc           *call.CallService
@@ -67,6 +72,7 @@ type Service struct {
 	concurrency       ConcurrencyGuard
 	tenantSettings    TenantSettingsLookup
 	recordingAnnounce func(ctx context.Context, tenantID int64) bool
+	qaTrigger         QAAutoTrigger
 }
 
 func NewService(
@@ -124,6 +130,11 @@ func (s *Service) SetFamiliarRecorder(rec FamiliarAgentRecorder, ttlDays func(te
 // requires a recording compliance announcement before call recording starts.
 func (s *Service) SetRecordingAnnounceLookup(fn func(ctx context.Context, tenantID int64) bool) {
 	s.recordingAnnounce = fn
+}
+
+// SetQAAutoTrigger wires QA auto-inspection for completed calls.
+func (s *Service) SetQAAutoTrigger(t QAAutoTrigger) {
+	s.qaTrigger = t
 }
 
 // SetConcurrencyGuard wires the per-tenant concurrent call limiter.
@@ -407,7 +418,7 @@ func (s *Service) postCallHooksAsync(c *call.Call) {
 		})
 	}
 
-	// CRM interaction record
+	// CRM interaction record + bidirectional call↔customer linking
 	if s.customerSvc != nil && c.AgentUserID != nil {
 		phone := c.Caller
 		if c.Direction == call.DirectionOutbound {
@@ -415,6 +426,10 @@ func (s *Service) postCallHooksAsync(c *call.Call) {
 		}
 		customer, _ := s.customerSvc.FindByPhone(ctx, c.TenantID, phone)
 		if customer != nil {
+			if c.CustomerID == nil {
+				c.CustomerID = &customer.ID
+				_ = s.callSvc.UpdateCustomerID(ctx, c.ID, customer.ID)
+			}
 			_ = s.customerSvc.RecordInteraction(ctx, crm.RecordInteractionInput{
 				CustomerID: customer.ID,
 				TenantID:   c.TenantID,
@@ -449,6 +464,11 @@ func (s *Service) postCallHooksAsync(c *call.Call) {
 			}
 		}
 		s.familiar.RememberAgent(ctx, c.TenantID, c.Caller, *c.AgentUserID, ttlDays)
+	}
+
+	// QA auto-inspection
+	if s.qaTrigger != nil && c.AnsweredAt != nil {
+		s.qaTrigger.AutoInspect(ctx, c.TenantID, c.ID)
 	}
 }
 

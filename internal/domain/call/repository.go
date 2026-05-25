@@ -24,6 +24,7 @@ type CallRepository interface {
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*Call, int64, error)
 	ListWithFilter(ctx context.Context, tenantID int64, filter CallListFilter, offset, limit int) ([]*Call, int64, error)
 	ListWithCursor(ctx context.Context, tenantID int64, filter CallListFilter, cursor int64, limit int) ([]*Call, error)
+	CountTodayByTenant(ctx context.Context, tenantID int64) (total, inbound, outbound, answered, abandoned, active, queued int, err error)
 }
 
 type CallEventRepository interface {

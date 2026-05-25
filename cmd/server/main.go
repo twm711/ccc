@@ -117,6 +117,7 @@ func main() {
 	callbackRepo := infraMySQL.NewCallbackRequestRepo(db)
 	agentPresenceRepo := infraMySQL.NewAgentPresenceRepo(db)
 	agentPresenceLogRepo := infraMySQL.NewAgentPresenceLogRepo(db)
+	agentShiftLogRepo := infraMySQL.NewAgentShiftLogRepo(db)
 	webhookConfigRepo := infraMySQL.NewWebhookConfigRepo(db)
 	webhookLogRepo := infraMySQL.NewWebhookDeliveryLogRepo(db)
 	screenPopConfigRepo := infraMySQL.NewScreenPopConfigRepo(db)
@@ -178,6 +179,7 @@ func main() {
 		logger.Warn().Msg("ESL: FREESWITCH_HOST not set, telephony commands disabled")
 	}
 	agentPresenceSvc := identity.NewAgentPresenceService(agentPresenceRepo, agentPresenceLogRepo)
+	agentPresenceSvc.SetShiftLogRepo(agentShiftLogRepo)
 	// Resolve effective ACW seconds for an agent: prefer agent.acw_seconds,
 	// then tenant_settings.default_acw_seconds. This wiring fixes a P1 defect
 	// where agent_presence rows never carried an ACWSeconds value, so the
@@ -659,8 +661,12 @@ func main() {
 	lifecycleSvc.SetCampaignService(campaignSvc)
 	lifecycleSvc.SetQueueSnapshotRepo(queueSnapshotRepo)
 
+	// Start dashboard refresher (aggregates DB data into Redis every 10s)
+	dashRefresher := dashboard.NewRefresher(callRepo, agentPresenceRepo, tenantRepo, dashboardRepo, logger)
+
 	// Start WebSocket hub goroutines
 	hubCtx, hubCancel := context.WithCancel(context.Background())
+	go dashRefresher.Start(hubCtx)
 	go dashboardHub.StartBroadcast(hubCtx)
 	go imHub.StartBroadcast(hubCtx)
 	go agentHub.StartBroadcast(hubCtx)
@@ -677,6 +683,28 @@ func main() {
 			case <-ticker.C:
 				if n, err := callbackSch.ProcessAllPending(hubCtx); err == nil && n > 0 {
 					logger.Info().Int("processed", n).Msg("callback scheduler: processed pending callbacks")
+				}
+			}
+		}
+	}()
+
+	// Ghost agent auto-reset: scan agents stuck in talking/dialing for over 4 hours.
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-hubCtx.Done():
+				return
+			case <-ticker.C:
+				tenants, _, err := tenantRepo.List(hubCtx, 0, 1000)
+				if err != nil {
+					continue
+				}
+				for _, t := range tenants {
+					if n, err := agentPresenceSvc.ResetGhostAgents(hubCtx, t.ID, 4*time.Hour); err == nil && n > 0 {
+						logger.Warn().Int("reset", n).Int64("tenant_id", t.ID).Msg("ghost agent auto-reset")
+					}
 				}
 			}
 		}
@@ -704,6 +732,7 @@ func main() {
 			Logger:   logger,
 		}, lifecycleSvc)
 		go listener.Run(hubCtx)
+		go eslClient.StartHealthCheck(hubCtx)
 		logger.Info().Msg("ESL event listener started")
 	}
 
@@ -721,8 +750,19 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info().Msg("shutting down server...")
+
+	// Phase 1: stop accepting new traffic
+	handler.SetReady(false)
+	logger.Info().Msg("readiness probe disabled, draining connections...")
+
+	// Phase 2: stop background tasks
 	hubCancel()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	// Phase 3: drain period for load balancers to detect unavailability
+	time.Sleep(5 * time.Second)
+
+	// Phase 4: wait for in-flight requests to complete
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error().Err(err).Msg("server shutdown error")

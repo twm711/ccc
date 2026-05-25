@@ -312,6 +312,12 @@ func (h *DigitalEmployeeHandler) Handle(_ context.Context, sess *Session, node r
 
 	sess.Variables["digital_employee_id"] = cfg.DigitalEmployeeID
 	sess.Variables["digital_employee_scene"] = cfg.SceneID
+	if cfg.MaxTurns > 0 {
+		sess.Variables["digital_employee_max_turns"] = fmt.Sprintf("%d", cfg.MaxTurns)
+	}
+	if cfg.TransferOnFailure {
+		sess.Variables["digital_employee_transfer_on_failure"] = "true"
+	}
 	return "success", nil
 }
 

@@ -872,6 +872,16 @@ func (s *CallService) UpdateDurations(ctx context.Context, c *Call) error {
 	return s.calls.Update(ctx, c)
 }
 
+// UpdateCustomerID links a call to a CRM customer.
+func (s *CallService) UpdateCustomerID(ctx context.Context, callID, customerID int64) error {
+	c, err := s.calls.GetByID(ctx, callID)
+	if err != nil || c == nil {
+		return fmt.Errorf("call %d not found", callID)
+	}
+	c.CustomerID = &customerID
+	return s.calls.Update(ctx, c)
+}
+
 // CalculateDurations computes IVR/ring/queue/wait durations from call events.
 func (s *CallService) CalculateDurations(c *Call, events []*CallEvent) {
 	var ivrStart, queueStart, ringStart time.Time
