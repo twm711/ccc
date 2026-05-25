@@ -58,6 +58,10 @@ func main() {
 
 	cfg := config.Load()
 
+	if cfg.JWT.Secret == "change-me-in-production" {
+		logger.Fatal().Msg("JWT_SECRET must be changed from its default value before running in production")
+	}
+
 	if err := snowflake.Init(cfg.Snowflake.NodeID); err != nil {
 		logger.Fatal().Err(err).Msg("failed to init snowflake")
 	}
@@ -376,6 +380,7 @@ func main() {
 	sipTrunkHandler := handler.NewSIPTrunkHandler(sipTrunkRepo)
 	phoneNumberHandler := handler.NewPhoneNumberHandler(phoneNumberRepo)
 	recordingHandler := handler.NewRecordingHandler(recordingRepo)
+	recordingHandler.SetAccessLogger(infraMySQL.NewRecordingAccessLogger(auditLogRepo))
 	if cfg.Storage.Endpoint != "" {
 		store, err := storage.NewMinIOClient(storage.Config{
 			Endpoint:  cfg.Storage.Endpoint,
@@ -634,6 +639,21 @@ func main() {
 		Logger:                 logger,
 	})
 
+	// Wire JWT secret for WebSocket JWT auth.
+	agentHub.SetJWTSecret(cfg.JWT.Secret)
+
+	// Wire concurrency guard for per-tenant call limits.
+	concurrencyGuard := infraRedis.NewConcurrencyGuard(redisClient)
+	lifecycleSvc.SetConcurrencyGuard(concurrencyGuard, &tenantSettingsAdapter{repo: tenantSettingsRepo})
+
+	// Wire recording announce lookup.
+	lifecycleSvc.SetRecordingAnnounceLookup(func(ctx context.Context, tenantID int64) bool {
+		if ts, err := tenantSettingsRepo.GetByTenantID(ctx, tenantID); err == nil && ts != nil {
+			return ts.RecordingAnnounce
+		}
+		return false
+	})
+
 	// Wire lifecycle → agentHub for real-time agent notifications
 	lifecycleSvc.SetAgentNotifier(agentHub)
 	lifecycleSvc.SetCampaignService(campaignSvc)
@@ -708,6 +728,20 @@ func main() {
 		logger.Error().Err(err).Msg("server shutdown error")
 	}
 	logger.Info().Msg("server stopped")
+}
+
+// tenantSettingsAdapter wraps the TenantSettingsRepository to satisfy the
+// lifecycle.TenantSettingsLookup interface.
+type tenantSettingsAdapter struct {
+	repo identity.TenantSettingsRepository
+}
+
+func (a *tenantSettingsAdapter) GetByTenantID(ctx context.Context, tenantID int64) (maxConcurrentCalls int) {
+	ts, err := a.repo.GetByTenantID(ctx, tenantID)
+	if err != nil || ts == nil {
+		return 0
+	}
+	return ts.MaxConcurrentCalls
 }
 
 // runNLSRefresher polls Aliyun NLS for a fresh token before the current one

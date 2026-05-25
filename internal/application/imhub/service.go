@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/im"
+	"github.com/divord97/ccc/pkg/wsutil"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -15,7 +16,7 @@ import (
 var imUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     wsutil.CheckOrigin(),
 }
 
 // IMEvent represents a message event sent over WebSocket.

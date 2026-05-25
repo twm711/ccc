@@ -48,6 +48,14 @@ const (
 	CallStatusFailed    CallStatus = "failed"
 )
 
+type HangupBy string
+
+const (
+	HangupByAgent    HangupBy = "agent"
+	HangupByCustomer HangupBy = "customer"
+	HangupBySystem   HangupBy = "system"
+)
+
 type HangupReason string
 
 const (
@@ -102,6 +110,7 @@ type Call struct {
 	CampaignCaseID      *int64          `db:"campaign_case_id" json:"campaign_case_id,omitempty"`
 	Status              CallStatus      `db:"status" json:"status"`
 	HangupReason        *HangupReason   `db:"hangup_reason" json:"hangup_reason,omitempty"`
+	HangupBy            *HangupBy       `db:"hangup_by" json:"hangup_by,omitempty"`
 	DispositionCode     *string         `db:"disposition_code" json:"disposition_code,omitempty"`
 	HoldCount           int             `db:"hold_count" json:"hold_count"`
 	TransferCount       int             `db:"transfer_count" json:"transfer_count"`

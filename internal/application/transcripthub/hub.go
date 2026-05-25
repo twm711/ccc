@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/divord97/ccc/pkg/wsutil"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -15,7 +16,7 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     wsutil.CheckOrigin(),
 }
 
 type TranscriptEvent struct {

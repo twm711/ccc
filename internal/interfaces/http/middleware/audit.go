@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/platform"
@@ -29,12 +31,32 @@ func AuditLog(repo platform.AuditLogRepository) func(http.Handler) http.Handler 
 				UserID:    userID,
 				Action:    r.Method,
 				Resource:  r.URL.Path,
-				IP:        r.RemoteAddr,
+				IP:        clientIP(r),
 				UserAgent: r.UserAgent(),
 				CreatedAt: time.Now(),
 			}
 
-			_ = repo.Create(r.Context(), log)
+			// Async write to avoid blocking the response path.
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = repo.Create(ctx, log)
+			}()
 		})
 	}
+}
+
+// clientIP returns the client's real IP, preferring X-Forwarded-For and
+// X-Real-IP headers set by reverse proxies.
+func clientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if i := strings.IndexByte(xff, ','); i > 0 {
+			return strings.TrimSpace(xff[:i])
+		}
+		return strings.TrimSpace(xff)
+	}
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	return r.RemoteAddr
 }

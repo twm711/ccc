@@ -23,12 +23,18 @@ type RecordingStore interface {
 }
 
 type RecordingHandler struct {
-	repo  call.RecordingRepository
-	store RecordingStore
+	repo     call.RecordingRepository
+	store    RecordingStore
+	auditLog call.RecordingAccessLogger
 }
 
 func NewRecordingHandler(repo call.RecordingRepository) *RecordingHandler {
 	return &RecordingHandler{repo: repo}
+}
+
+// SetAccessLogger wires an audit logger for recording stream/download access.
+func (h *RecordingHandler) SetAccessLogger(l call.RecordingAccessLogger) {
+	h.auditLog = l
 }
 
 // SetStore wires the object storage backend used by Stream/Download. When the
@@ -69,6 +75,7 @@ func (h *RecordingHandler) Stream(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.logAccess(r, rec.ID, "stream")
 	h.serveObject(w, r, rec, false)
 }
 
@@ -77,6 +84,7 @@ func (h *RecordingHandler) Download(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	h.logAccess(r, rec.ID, "download")
 	h.serveObject(w, r, rec, true)
 }
 
@@ -121,6 +129,15 @@ func (h *RecordingHandler) serveObject(w http.ResponseWriter, r *http.Request, r
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, rc)
+}
+
+func (h *RecordingHandler) logAccess(r *http.Request, recordingID int64, action string) {
+	if h.auditLog == nil {
+		return
+	}
+	userID := middleware.UserIDFromCtx(r.Context())
+	tenantID := middleware.TenantIDFromCtx(r.Context())
+	go h.auditLog.LogAccess(context.Background(), tenantID, userID, recordingID, action, r.RemoteAddr)
 }
 
 // VoicemailHandler

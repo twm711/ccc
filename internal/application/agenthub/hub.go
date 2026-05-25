@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/divord97/ccc/pkg/wsutil"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -15,7 +18,7 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     wsutil.CheckOrigin(),
 }
 
 type Event struct {
@@ -31,9 +34,10 @@ type Client struct {
 }
 
 type Hub struct {
-	logger  zerolog.Logger
-	mu      sync.RWMutex
-	clients map[int64]map[*Client]bool // agentID -> clients
+	logger    zerolog.Logger
+	jwtSecret string
+	mu        sync.RWMutex
+	clients   map[int64]map[*Client]bool // agentID -> clients
 }
 
 func NewHub(logger zerolog.Logger) *Hub {
@@ -41,6 +45,11 @@ func NewHub(logger zerolog.Logger) *Hub {
 		logger:  logger,
 		clients: make(map[int64]map[*Client]bool),
 	}
+}
+
+// SetJWTSecret enables JWT-based authentication for WebSocket connections.
+func (h *Hub) SetJWTSecret(secret string) {
+	h.jwtSecret = secret
 }
 
 func (h *Hub) StartBroadcast(ctx context.Context) {
@@ -89,14 +98,47 @@ func (h *Hub) SendToAgent(agentID int64, event Event) {
 }
 
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
+	var agentID, tenantID int64
+
+	// Prefer JWT-based auth from Authorization header or Sec-WebSocket-Protocol.
+	if h.jwtSecret != "" {
+		tokenStr := ""
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			tokenStr = strings.TrimPrefix(auth, "Bearer ")
+		} else if proto := r.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+			// Browsers can't set Authorization on WS; use subprotocol as fallback.
+			tokenStr = proto
+		}
+		if tokenStr != "" {
+			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+				return []byte(h.jwtSecret), nil
+			})
+			if err != nil || !token.Valid {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			if claims, ok := token.Claims.(jwt.MapClaims); ok {
+				if v, ok := claims["agent_id"].(float64); ok {
+					agentID = int64(v)
+				}
+				if v, ok := claims["tenant_id"].(float64); ok {
+					tenantID = int64(v)
+				}
+			}
+		}
+	}
+
+	// Fallback to query params for backward compatibility.
+	if agentID == 0 {
+		agentID, _ = strconv.ParseInt(r.URL.Query().Get("agent_id"), 10, 64)
+		tenantID, _ = strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
+	}
+
 	conn, err := wsUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("agent-events ws: upgrade failed")
 		return
 	}
-
-	agentID, _ := strconv.ParseInt(r.URL.Query().Get("agent_id"), 10, 64)
-	tenantID, _ := strconv.ParseInt(r.URL.Query().Get("tenant_id"), 10, 64)
 
 	client := &Client{AgentID: agentID, TenantID: tenantID, Send: make(chan []byte, 256)}
 	h.Register(client)

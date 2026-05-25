@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/divord97/ccc/internal/domain/report"
+	"github.com/divord97/ccc/pkg/wsutil"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog"
 )
@@ -16,7 +17,7 @@ import (
 var wsUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin:     func(r *http.Request) bool { return true },
+	CheckOrigin:     wsutil.CheckOrigin(),
 }
 
 // Hub manages WebSocket connections and broadcasts dashboard updates.

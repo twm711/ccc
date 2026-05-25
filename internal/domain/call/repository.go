@@ -42,6 +42,11 @@ type RecordingRepository interface {
 	List(ctx context.Context, tenantID int64, offset, limit int) ([]*Recording, int64, error)
 }
 
+// RecordingAccessLogger records access events for recording stream/download.
+type RecordingAccessLogger interface {
+	LogAccess(ctx context.Context, tenantID, userID, recordingID int64, action, ip string)
+}
+
 type QueueSnapshotRepository interface {
 	Create(ctx context.Context, s *QueueSnapshot) error
 	GetLatest(ctx context.Context, tenantID, skillGroupID int64) (*QueueSnapshot, error)

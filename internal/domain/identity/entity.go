@@ -22,6 +22,7 @@ type TenantSettings struct {
 	TenantID                int64  `db:"tenant_id" json:"tenant_id"`
 	MaxAgents               int    `db:"max_agents" json:"max_agents"`
 	MaxConcurrentCalls      int    `db:"max_concurrent_calls" json:"max_concurrent_calls"`
+	RecordingAnnounce       bool   `db:"recording_announce" json:"recording_announce"`
 	RecordingRetentionDays  int    `db:"recording_retention_days" json:"recording_retention_days"`
 	RecordingStorageBackend string `db:"recording_storage_backend" json:"recording_storage_backend"`
 	Timezone                string `db:"timezone" json:"timezone"`
@@ -113,6 +114,7 @@ type SkillGroup struct {
 	Description   string           `db:"description" json:"description,omitempty"`
 	RoutingPolicy RoutingPolicy    `db:"routing_policy" json:"routing_policy"`
 	Priority      int              `db:"priority" json:"priority"`
+	MaxQueueSize  int              `db:"max_queue_size" json:"max_queue_size"`
 	MaxWaitSec    int              `db:"max_wait_sec" json:"max_wait_sec"`
 	OverflowGroup *int64           `db:"overflow_group_id" json:"overflow_group_id,omitempty"`
 	Status        SkillGroupStatus `db:"status" json:"status"`

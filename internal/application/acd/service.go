@@ -29,6 +29,7 @@ import (
 	"github.com/divord97/ccc/internal/application/lifecycle"
 	"github.com/divord97/ccc/internal/domain/call"
 	"github.com/divord97/ccc/internal/domain/identity"
+	"github.com/divord97/ccc/pkg/metrics"
 	"github.com/redis/go-redis/v9"
 	"github.com/rs/zerolog"
 )
@@ -46,7 +47,7 @@ const (
 // LifecycleService is the subset of lifecycle.Service required by the dispatcher.
 type LifecycleService interface {
 	TransitionCallToRinging(ctx context.Context, callID, agentUserID int64) (*call.Call, error)
-	EndCall(ctx context.Context, callID int64, reason call.HangupReason) (*call.Call, error)
+	EndCall(ctx context.Context, callID int64, reason call.HangupReason, hangupBy ...call.HangupBy) (*call.Call, error)
 }
 
 var _ LifecycleService = (*lifecycle.Service)(nil)
@@ -123,6 +124,17 @@ func (s *Service) Enqueue(ctx context.Context, callID, skillGroupID int64, prior
 	if s.rdb == nil {
 		return errors.New("acd: redis client not configured")
 	}
+
+	// Check max_queue_size before enqueuing.
+	if sg, err := s.skillGroup.GetByID(ctx, skillGroupID); err == nil && sg != nil && sg.MaxQueueSize > 0 {
+		qLen, _ := s.rdb.ZCard(ctx, queueKey(skillGroupID)).Result()
+		if qLen >= int64(sg.MaxQueueSize) {
+			s.logger.Warn().Int64("call_id", callID).Int64("sg", skillGroupID).Int("max", sg.MaxQueueSize).Msg("acd: queue full, rejecting")
+			metrics.QueueRejected.Inc()
+			return fmt.Errorf("acd: queue full for skill group %d (max %d)", skillGroupID, sg.MaxQueueSize)
+		}
+	}
+
 	now := time.Now()
 	score := scoreFor(priority, now)
 	if err := s.rdb.ZAdd(ctx, queueKey(skillGroupID), redis.Z{Score: score, Member: memberFor(callID, now)}).Err(); err != nil {
@@ -131,6 +143,7 @@ func (s *Service) Enqueue(ctx context.Context, callID, skillGroupID int64, prior
 	if err := s.rdb.SAdd(ctx, activeSGKey, skillGroupID).Err(); err != nil {
 		return fmt.Errorf("acd: register sg: %w", err)
 	}
+	metrics.QueueEnqueued.Inc()
 	s.logger.Debug().Int64("call_id", callID).Int64("sg", skillGroupID).Int("priority", priority).Msg("acd: enqueued")
 	return nil
 }
@@ -205,7 +218,7 @@ func (s *Service) expireQueued(ctx context.Context, sgID int64) {
 		if err != nil || removed == 0 {
 			continue
 		}
-		if _, err := s.lifecycle.EndCall(ctx, callID, call.HangupQueueTimeout); err != nil {
+		if _, err := s.lifecycle.EndCall(ctx, callID, call.HangupQueueTimeout, call.HangupBySystem); err != nil {
 			s.logger.Warn().Err(err).Int64("call_id", callID).Int64("sg", sgID).Msg("acd: queue timeout end call")
 			continue
 		}

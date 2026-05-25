@@ -143,7 +143,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r := chi.NewRouter()
 
 	r.Use(chiMiddleware.Recoverer)
-	r.Use(chiMiddleware.RequestID)
+	r.Use(middleware.RequestID)
 	r.Use(middleware.CORS)
 	r.Use(middleware.Metrics)
 	r.Use(middleware.RequestLogger(deps.Logger))

@@ -183,9 +183,18 @@ func (s *Service) dialPredictive(ctx context.Context, c *campaign.Campaign, stat
 	s.mu.Lock()
 	abandonRate := calcAbandonRate(state.abandonCount, state.totalDialed)
 	slots := int(c.RatioMultiplier) - state.activeCalls
-	if abandonRate > c.MaxAbandonRate {
-		slots = 0 // throttle when abandon rate too high
-		s.logger.Warn().Int64("campaign_id", c.ID).Float64("abandon_rate", abandonRate).Msg("predictive: throttled due to high abandon rate")
+	if c.MaxAbandonRate > 0 && abandonRate > c.MaxAbandonRate {
+		// Proportional throttle: scale slots down based on how far above threshold.
+		overshoot := abandonRate / c.MaxAbandonRate
+		if overshoot >= 2.0 {
+			slots = 0
+		} else {
+			slots = int(float64(slots) / overshoot)
+			if slots < 1 {
+				slots = 1
+			}
+		}
+		s.logger.Warn().Int64("campaign_id", c.ID).Float64("abandon_rate", abandonRate).Int("throttled_slots", slots).Msg("predictive: throttled due to high abandon rate")
 	}
 	s.mu.Unlock()
 
