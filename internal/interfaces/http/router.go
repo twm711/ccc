@@ -155,6 +155,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 	// --- Public Auth Route (no JWT) ---
 	r.Post("/api/v1/auth/login", deps.AuthHandler.Login)
+	r.Post("/api/v1/auth/refresh", deps.AuthHandler.RefreshToken)
 
 	// --- WebSocket Routes (auth via query param) ---
 	if deps.DashboardHub != nil {

@@ -1,6 +1,9 @@
 package report
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // DashboardOverview holds real-time aggregated metrics for a tenant.
 type DashboardOverview struct {
@@ -166,6 +169,9 @@ type CampaignReport struct {
 	AvgDurationSec float64 `json:"avg_duration_sec" db:"avg_duration_sec"`
 }
 
+// MaxReportWindow is the maximum allowed time range for a single report query (31 days).
+const MaxReportWindow = 31 * 24 * time.Hour
+
 // ReportFilter holds common filter parameters for report queries.
 type ReportFilter struct {
 	TenantID     int64
@@ -176,4 +182,15 @@ type ReportFilter struct {
 	CampaignID   *int64
 	Offset       int
 	Limit        int
+}
+
+// Validate checks that the filter has a bounded time window.
+func (f *ReportFilter) Validate() error {
+	if f.EndTime.Before(f.StartTime) {
+		return fmt.Errorf("report: end_time must be after start_time")
+	}
+	if f.EndTime.Sub(f.StartTime) > MaxReportWindow {
+		return fmt.Errorf("report: time range cannot exceed 31 days")
+	}
+	return nil
 }

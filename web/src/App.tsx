@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { ConfigProvider } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import AppLayout from './components/layout/AppLayout';
 import Login from './pages/Login';
 import DashboardPage from './pages/dashboard/DashboardPage';
@@ -59,6 +60,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <ConfigProvider locale={zhCN}>
       <BrowserRouter>
         <Routes>
@@ -125,5 +127,6 @@ export default function App() {
         </Routes>
       </BrowserRouter>
     </ConfigProvider>
+    </ErrorBoundary>
   );
 }
