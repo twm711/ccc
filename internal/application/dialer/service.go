@@ -32,6 +32,7 @@ type dialerState struct {
 	activeCalls   int
 	abandonCount  int
 	totalDialed   int
+	startedAt     time.Time
 	stopCh        chan struct{}
 }
 
@@ -79,6 +80,7 @@ func (s *Service) StartDialing(ctx context.Context, campaignID int64) error {
 	state := &dialerState{
 		campaignID: campaignID,
 		mode:       c.DialingMode,
+		startedAt:  time.Now(),
 		stopCh:     make(chan struct{}),
 	}
 	s.active[campaignID] = state
@@ -103,7 +105,8 @@ func (s *Service) StopDialing(campaignID int64) {
 	}
 }
 
-// GetStats returns real-time dialer statistics for a campaign.
+// GetStats returns real-time dialer statistics for a campaign. Used by the
+// supervisor dashboard to monitor live campaign throughput.
 func (s *Service) GetStats(campaignID int64) *DialerStats {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -111,23 +114,41 @@ func (s *Service) GetStats(campaignID int64) *DialerStats {
 	if !exists {
 		return &DialerStats{CampaignID: campaignID}
 	}
+	connected := state.totalDialed - state.abandonCount
+	if connected < 0 {
+		connected = 0
+	}
+	uptime := 0
+	if !state.startedAt.IsZero() {
+		uptime = int(time.Since(state.startedAt).Seconds())
+	}
 	return &DialerStats{
-		CampaignID:   campaignID,
-		ActiveCalls:  state.activeCalls,
-		TotalDialed:  state.totalDialed,
-		AbandonCount: state.abandonCount,
-		AbandonRate:  calcAbandonRate(state.abandonCount, state.totalDialed),
-		IsRunning:    true,
+		CampaignID:      campaignID,
+		Mode:            string(state.mode),
+		ActiveCalls:     state.activeCalls,
+		TotalDialed:     state.totalDialed,
+		ConnectedCalls:  connected,
+		AbandonCount:    state.abandonCount,
+		AbandonRate:     calcAbandonRate(state.abandonCount, state.totalDialed),
+		ConnectRate:     calcAbandonRate(connected, state.totalDialed),
+		IsRunning:       true,
+		StartedAt:       state.startedAt,
+		UptimeSeconds:   uptime,
 	}
 }
 
 type DialerStats struct {
-	CampaignID   int64   `json:"campaign_id"`
-	ActiveCalls  int     `json:"active_calls"`
-	TotalDialed  int     `json:"total_dialed"`
-	AbandonCount int     `json:"abandon_count"`
-	AbandonRate  float64 `json:"abandon_rate"`
-	IsRunning    bool    `json:"is_running"`
+	CampaignID     int64     `json:"campaign_id"`
+	Mode           string    `json:"mode"`
+	ActiveCalls    int       `json:"active_calls"`
+	TotalDialed    int       `json:"total_dialed"`
+	ConnectedCalls int       `json:"connected_calls"`
+	AbandonCount   int       `json:"abandon_count"`
+	AbandonRate    float64   `json:"abandon_rate"`
+	ConnectRate    float64   `json:"connect_rate"`
+	IsRunning      bool      `json:"is_running"`
+	StartedAt      time.Time `json:"started_at,omitempty"`
+	UptimeSeconds  int       `json:"uptime_seconds"`
 }
 
 func calcAbandonRate(abandoned, total int) float64 {

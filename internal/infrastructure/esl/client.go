@@ -120,6 +120,47 @@ func (c *Client) Grow(n int) int {
 	return added
 }
 
+// AutoScale runs a background loop that grows the pool under contention and
+// shrinks it back toward minPool when idle. Should be called once after
+// NewClient; the loop exits when ctx is cancelled.
+//
+// Heuristic: every interval, if pool is >80% utilised, grow by 1; if <20%
+// utilised for two consecutive ticks, shrink by 1.
+func (c *Client) AutoScale(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	idleTicks := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			size := c.PoolSize()
+			if size == 0 {
+				continue
+			}
+			available := len(c.pool)
+			utilization := float64(size-available) / float64(size)
+			switch {
+			case utilization > 0.8:
+				c.Grow(1)
+				idleTicks = 0
+			case utilization < 0.2:
+				idleTicks++
+				if idleTicks >= 2 {
+					c.Shrink(1)
+					idleTicks = 0
+				}
+			default:
+				idleTicks = 0
+			}
+		}
+	}
+}
+
 // Shrink removes n idle connections from the pool down to minPool.
 func (c *Client) Shrink(n int) int {
 	removed := 0

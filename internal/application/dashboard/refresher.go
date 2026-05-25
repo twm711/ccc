@@ -11,6 +11,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// refreshConcurrency caps parallel tenant refreshes per tick.
+// Tuned for hundreds of tenants per 10s tick without overwhelming MySQL/Redis.
+const refreshConcurrency = 8
+
 // Refresher periodically aggregates call and agent data into Redis dashboard snapshots.
 type Refresher struct {
 	callRepo    call.CallRepository
@@ -58,20 +62,18 @@ func (r *Refresher) refreshAll(ctx context.Context) {
 		return
 	}
 
-	// Fan-out tenant refreshes with bounded concurrency to reduce N+1 latency.
-	sem := make(chan struct{}, 8)
+	sem := make(chan struct{}, refreshConcurrency)
 	var wg sync.WaitGroup
 	for _, t := range tenants {
-		t := t
 		wg.Add(1)
 		sem <- struct{}{}
-		go func() {
+		go func(tenantID int64) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if err := r.refreshTenant(ctx, t.ID); err != nil {
-				r.logger.Error().Err(err).Int64("tenant_id", t.ID).Msg("dashboard refresher: refresh failed")
+			if err := r.refreshTenant(ctx, tenantID); err != nil {
+				r.logger.Error().Err(err).Int64("tenant_id", tenantID).Msg("dashboard refresher: refresh failed")
 			}
-		}()
+		}(t.ID)
 	}
 	wg.Wait()
 }

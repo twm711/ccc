@@ -199,6 +199,7 @@ func main() {
 			Logger:   logger,
 		})
 		callSvc.SetTelephonyProvider(esl.NewTelephonyAdapter(eslClient))
+		go eslClient.AutoScale(context.Background(), 30*time.Second)
 		logger.Info().Str("host", cfg.FreeSWITCH.Host).Msg("ESL: FreeSWITCH telephony provider configured")
 	} else {
 		logger.Warn().Msg("ESL: FREESWITCH_HOST not set, telephony commands disabled")
@@ -304,6 +305,11 @@ func main() {
 	})
 	ivrEngine := ivr.DefaultEngine(eslClient, ivrFlowLoader, acdSvc)
 	lifecycleSvc.SetIVREngine(ivrEngine)
+	// IVR context: persist DTMFs/captured vars so the agent screen pop shows
+	// the caller's pre-transfer journey.
+	ivrContextStore := infraRedis.NewIVRContextStore(redisClient)
+	ivrEngine.SetIVRContextSink(ivrContextStore)
+	screenPopSvc.SetIVRContextLoader(ivrContextStore)
 	// LLM Provider: use DashScope when API key configured, otherwise fallback to stub.
 	var llmProvider llm.Provider
 	if cfg.Aliyun.DashScopeAPIKey != "" {
@@ -357,6 +363,7 @@ func main() {
 	// NATS event publisher (best-effort): publishes ccc.call.* and ccc.agent.*
 	// to JetStream so downstream consumers (analytics, BI, third-party CRM
 	// hooks) can subscribe without polling the DB.
+	var postCallWorker *postcall.Worker
 	if cfg.NATS.URL != "" {
 		natsClient, err := infraNATS.NewClient(infraNATS.Config{URL: cfg.NATS.URL, Logger: logger})
 		if err != nil {
@@ -369,8 +376,9 @@ func main() {
 			defer natsClient.Close()
 			logger.Info().Str("url", cfg.NATS.URL).Str("stream", cfg.NATS.Stream).Msg("nats: event publisher wired")
 
-			// Start NATS consumer for post-call processing (CDR, analytics).
-			postCallWorker := postcall.NewWorker(callRepo, logger)
+			// Start NATS consumer for post-call processing (CDR aggregation, QA auto-trigger).
+			cdrRepo := postcall.NewMySQLCDRRepo(db)
+			postCallWorker = postcall.NewWorker(callRepo, cdrRepo, logger)
 			natsConsumer := infraNATS.NewConsumer(natsClient, postCallWorker.HandleMessage)
 			go func() {
 				if err := natsConsumer.Subscribe(context.Background(), cfg.NATS.Stream, "postcall-worker", "ccc.call.>"); err != nil {
@@ -403,6 +411,13 @@ func main() {
 	qiSvc.SetLLMProvider(llmProvider)
 	// Set LLM provider on digital employee service for fallback intent matching.
 	digitalEmployeeSvc.SetLLMProvider(llmProvider)
+
+	// Wire QA auto-trigger: post-call NATS worker fires AutoInspect on every answered call.
+	if postCallWorker != nil {
+		postCallWorker.SetQAAutoTrigger(qiSvc)
+	}
+	// Also wire lifecycle-path auto-trigger as a backup for deployments without NATS.
+	lifecycleSvc.SetQAAutoTrigger(qiSvc)
 
 	// --- Infrastructure ---
 	rateLimiter := infraRedis.NewRateLimiter(redisClient)
@@ -753,6 +768,8 @@ func main() {
 	// Wire IM hub for real-time broadcast of REST-posted messages.
 	imSessionHandler.SetBroadcaster(imHub)
 	widgetHandler.SetBroadcaster(imHub)
+	// Widget creates sessions; immediately try auto-routing to an idle agent in the skill group.
+	widgetHandler.SetAutoRouter(imRouterSvc)
 
 	// ACD dispatcher: pull queued calls and assign them to idle agents.
 	go acdSvc.Run(hubCtx)

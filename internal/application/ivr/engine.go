@@ -19,6 +19,15 @@ type Engine struct {
 // SetASRProvider sets the speech recognition provider for ASR nodes.
 func (e *Engine) SetASRProvider(p ASRProvider) { e.asrProvider = p }
 
+// SetIVRContextSink rewires the TransferToAgent handler to persist session
+// variables (so the agent screen pop can show the caller's IVR breadcrumbs).
+// Safe to call after DefaultEngine has registered the handler.
+func (e *Engine) SetIVRContextSink(sink IVRContextSink) {
+	if h, ok := e.handlers[routing.NodeTransferToAgent].(*TransferToAgentHandler); ok {
+		h.Context = sink
+	}
+}
+
 // NodeHandler processes a single IVR node and returns the exit name to follow.
 type NodeHandler interface {
 	Handle(ctx context.Context, sess *Session, node routing.FlowNode) (exitName string, err error)

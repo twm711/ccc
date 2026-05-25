@@ -634,6 +634,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 
 		r.Post("/webrtc-quality", deps.WebRTCQualityHandler.Save)
 		r.Get("/calls/{callId}/webrtc-quality", deps.WebRTCQualityHandler.ListByCall)
+		r.Get("/calls/{callId}/tickets", deps.TicketHandler.ListByCall)
 		r.Get("/agents/{agentId}/webrtc-quality", deps.WebRTCQualityHandler.ListByAgent)
 
 		// --- Advanced AI Routes ---

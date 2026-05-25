@@ -596,8 +596,17 @@ func (s *AgentPresenceService) scheduleACWTimeout(agentID int64, seconds int) {
 	}()
 }
 
-// ResetGhostAgents scans agents stuck in talking/dialing longer than maxDuration
-// and resets them to idle. Returns the number of agents reset.
+// ResetGhostAgents scans agents whose presence row is stale and corrects them.
+// Two zombie classes are handled:
+//
+//  1. Stuck "active" agents — talking/dialing for longer than maxDuration with no
+//     heartbeat. These are reset to idle (call leg likely already torn down by
+//     FreeSWITCH but the lifecycle update was lost).
+//  2. Stale "online/idle" presence — heartbeat older than 3×maxDuration. These
+//     agents likely closed their browser without logging out; we mark them
+//     offline so ACD doesn't try to route to a phantom.
+//
+// Returns the total number of agents whose presence row was changed.
 func (s *AgentPresenceService) ResetGhostAgents(ctx context.Context, tenantID int64, maxDuration time.Duration) (int, error) {
 	presences, err := s.presence.ListByTenant(ctx, tenantID)
 	if err != nil {
@@ -605,10 +614,22 @@ func (s *AgentPresenceService) ResetGhostAgents(ctx context.Context, tenantID in
 	}
 	var resetCount int
 	now := time.Now()
+	staleHeartbeat := 3 * maxDuration
 	for _, p := range presences {
-		if (p.Status == PresenceTalking || p.Status == PresenceDialing) && now.Sub(p.LastStatusAt) > maxDuration {
+		switch {
+		case (p.Status == PresenceTalking || p.Status == PresenceDialing) && now.Sub(p.LastStatusAt) > maxDuration:
 			s.logTransition(ctx, p)
 			p.Status = PresenceIdle
+			p.SubState = SubStateNone
+			p.CurrentCallID = nil
+			p.UpdatedAt = now
+			p.LastStatusAt = now
+			if err := s.presence.Upsert(ctx, p); err == nil {
+				resetCount++
+			}
+		case (p.Status == PresenceOnline || p.Status == PresenceIdle || p.Status == PresenceACW) && now.Sub(p.UpdatedAt) > staleHeartbeat:
+			s.logTransition(ctx, p)
+			p.Status = PresenceOffline
 			p.SubState = SubStateNone
 			p.CurrentCallID = nil
 			p.UpdatedAt = now

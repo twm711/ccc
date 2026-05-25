@@ -326,6 +326,31 @@ func (s *QualityInspectionService) ListSchemes(ctx context.Context, tenantID int
 	return s.schemes.List(ctx, tenantID)
 }
 
+// AutoInspect picks the tenant's first available QA scheme and runs RunInspection
+// against the call's stored transcript. Designed to be called from the post-call
+// NATS worker (best-effort; failures are logged via the underlying repo and swallowed).
+//
+// Side-effects only — the caller does not get the result; the QAResult is persisted
+// by RunInspection and accessible via /qa/results.
+func (s *QualityInspectionService) AutoInspect(ctx context.Context, tenantID, callID int64) {
+	schemes, err := s.schemes.List(ctx, tenantID)
+	if err != nil || len(schemes) == 0 {
+		return // no scheme configured = silently skip; operations can opt in by creating one
+	}
+	transcript := s.transcriptFor(ctx, callID)
+	if transcript == "" {
+		return // ASR not finished or no recording; defer to manual inspection
+	}
+	_, _ = s.RunInspection(ctx, tenantID, callID, schemes[0].ID, transcript)
+}
+
+// transcriptFor is a seam for the transcript source. The current implementation
+// returns "" — once recording transcription is wired, this should fetch the
+// transcript from object storage or the call DB.
+func (s *QualityInspectionService) transcriptFor(_ context.Context, _ int64) string {
+	return ""
+}
+
 // RunInspection runs quality inspection on a transcript using a scheme.
 func (s *QualityInspectionService) RunInspection(ctx context.Context, tenantID, callID, schemeID int64, transcript string) (*QAResult, error) {
 	if transcript == "" {

@@ -19,13 +19,13 @@ func NewCallRepo(db *sqlx.DB) *CallRepo {
 func (r *CallRepo) Create(ctx context.Context, c *call.Call) error {
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO calls (id, tenant_id, channel_uuid, direction, call_type, media_type, caller, callee, masked_callee,
-		 agent_user_id, skill_group_id, ivr_flow_id, phone_number_id, carrier_id, parent_call_id, campaign_case_id,
+		 agent_user_id, skill_group_id, ivr_flow_id, phone_number_id, carrier_id, parent_call_id, campaign_case_id, customer_id,
 		 status, hangup_reason, disposition_code, hold_count, transfer_count, satisfaction_rating,
 		 ivr_duration_sec, ring_duration_sec, queue_duration_sec, wait_duration_sec, duration_sec,
 		 recording_url, custom_data, started_at, answered_at, ended_at)
-		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		c.ID, c.TenantID, c.ChannelUUID, c.Direction, c.CallType, c.MediaType, c.Caller, c.Callee, c.MaskedCallee,
-		c.AgentUserID, c.SkillGroupID, c.IVRFlowID, c.PhoneNumberID, c.CarrierID, c.ParentCallID, c.CampaignCaseID,
+		c.AgentUserID, c.SkillGroupID, c.IVRFlowID, c.PhoneNumberID, c.CarrierID, c.ParentCallID, c.CampaignCaseID, c.CustomerID,
 		c.Status, c.HangupReason, c.DispositionCode, c.HoldCount, c.TransferCount, c.SatisfactionRating,
 		c.IVRDurationSec, c.RingDurationSec, c.QueueDurationSec, c.WaitDurationSec, c.DurationSec,
 		c.RecordingURL, c.CustomData, c.StartedAt, c.AnsweredAt, c.EndedAt)
@@ -52,14 +52,14 @@ func (r *CallRepo) GetByID(ctx context.Context, id int64) (*call.Call, error) {
 
 func (r *CallRepo) Update(ctx context.Context, c *call.Call) error {
 	_, err := r.db.ExecContext(ctx,
-		`UPDATE calls SET status=?, hangup_reason=?, disposition_code=?, agent_user_id=?, skill_group_id=?,
+		`UPDATE calls SET status=?, hangup_reason=?, disposition_code=?, agent_user_id=?, skill_group_id=?, customer_id=?,
 		 hold_count=?, transfer_count=?, satisfaction_rating=?,
 		 ivr_duration_sec=?, ring_duration_sec=?, queue_duration_sec=?, wait_duration_sec=?, duration_sec=?,
-		 recording_url=?, answered_at=?, ended_at=? WHERE id=?`,
-		c.Status, c.HangupReason, c.DispositionCode, c.AgentUserID, c.SkillGroupID,
+		 recording_url=?, custom_data=?, answered_at=?, ended_at=? WHERE id=?`,
+		c.Status, c.HangupReason, c.DispositionCode, c.AgentUserID, c.SkillGroupID, c.CustomerID,
 		c.HoldCount, c.TransferCount, c.SatisfactionRating,
 		c.IVRDurationSec, c.RingDurationSec, c.QueueDurationSec, c.WaitDurationSec, c.DurationSec,
-		c.RecordingURL, c.AnsweredAt, c.EndedAt, c.ID)
+		c.RecordingURL, c.CustomData, c.AnsweredAt, c.EndedAt, c.ID)
 	return err
 }
 

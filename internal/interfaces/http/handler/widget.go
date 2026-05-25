@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -10,9 +11,15 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+// IMSessionAutoRouter assigns an idle agent to a fresh IM session by skill group.
+type IMSessionAutoRouter interface {
+	AutoRouteSession(ctx context.Context, sessionID int64, skillGroupID int64) error
+}
+
 type WidgetHandler struct {
 	svc         *im.IMService
 	broadcaster IMBroadcaster
+	autoRouter  IMSessionAutoRouter
 }
 
 func NewWidgetHandler(svc *im.IMService) *WidgetHandler {
@@ -21,6 +28,10 @@ func NewWidgetHandler(svc *im.IMService) *WidgetHandler {
 
 func (h *WidgetHandler) SetBroadcaster(b IMBroadcaster) {
 	h.broadcaster = b
+}
+
+func (h *WidgetHandler) SetAutoRouter(r IMSessionAutoRouter) {
+	h.autoRouter = r
 }
 
 func (h *WidgetHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +44,11 @@ func (h *WidgetHandler) CreateSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		response.Error(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.autoRouter != nil && sess.SkillGroupID != nil {
+		go func(sid int64, sg int64) {
+			_ = h.autoRouter.AutoRouteSession(context.Background(), sid, sg)
+		}(sess.ID, *sess.SkillGroupID)
 	}
 	response.JSON(w, http.StatusCreated, sess)
 }

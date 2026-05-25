@@ -9,13 +9,26 @@ import (
 	"github.com/divord97/ccc/internal/domain/integration"
 )
 
+// IVRContextLoader returns the IVR session variables captured before transfer.
+type IVRContextLoader interface {
+	Load(ctx context.Context, callID int64) (map[string]string, error)
+}
+
 type Service struct {
-	configs   integration.ScreenPopConfigRepository
-	customers *crm.CustomerService
+	configs    integration.ScreenPopConfigRepository
+	customers  *crm.CustomerService
+	ivrContext IVRContextLoader
 }
 
 func NewService(configs integration.ScreenPopConfigRepository, customers *crm.CustomerService) *Service {
 	return &Service{configs: configs, customers: customers}
+}
+
+// SetIVRContextLoader enables the screen pop to include the caller's IVR
+// context (DTMF selections, captured variables). Optional — pop still works
+// without it, just minus the IVR breadcrumbs.
+func (s *Service) SetIVRContextLoader(l IVRContextLoader) {
+	s.ivrContext = l
 }
 
 type CallInfo struct {
@@ -28,10 +41,11 @@ type CallInfo struct {
 }
 
 type ScreenPopData struct {
-	URLs         []string             `json:"urls"`
-	Customer     *crm.Customer        `json:"customer,omitempty"`
-	Phones       []*crm.CustomerPhone `json:"phones,omitempty"`
+	URLs         []string                   `json:"urls"`
+	Customer     *crm.Customer              `json:"customer,omitempty"`
+	Phones       []*crm.CustomerPhone       `json:"phones,omitempty"`
 	Interactions []*crm.CustomerInteraction `json:"interactions,omitempty"`
+	IVRContext   map[string]string          `json:"ivr_context,omitempty"`
 }
 
 // BuildScreenPop generates screen pop data: URLs + customer match + history.
@@ -49,6 +63,13 @@ func (s *Service) BuildScreenPop(ctx context.Context, tenantID int64, info CallI
 		}
 		url := s.substitute(cfg.URLTemplate, info)
 		data.URLs = append(data.URLs, url)
+	}
+
+	// IVR context: DTMFs, prompts, captured variables before transfer.
+	if s.ivrContext != nil && info.CallID > 0 {
+		if vars, err := s.ivrContext.Load(ctx, info.CallID); err == nil && len(vars) > 0 {
+			data.IVRContext = vars
+		}
 	}
 
 	// Match customer by phone number
