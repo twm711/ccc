@@ -307,9 +307,9 @@ func (s *Service) pickAgent(ctx context.Context, sg *identity.SkillGroup, callID
 	switch sg.RoutingPolicy {
 	case identity.RoutingPolicyRandom:
 		s.rngMu.Lock()
-idx := s.rng.Intn(len(candidates))
-s.rngMu.Unlock()
-return candidates[idx].ID, nil
+		idx := s.rng.Intn(len(candidates))
+		s.rngMu.Unlock()
+		return candidates[idx].ID, nil
 	case identity.RoutingPolicyRoundRobin:
 		idx, err := s.rdb.Incr(ctx, roundRobinPrefix+strconv.FormatInt(sg.ID, 10)).Result()
 		if err != nil {

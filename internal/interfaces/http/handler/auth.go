@@ -14,6 +14,7 @@ import (
 )
 
 type UserFinder interface {
+	GetByID(ctx context.Context, id int64) (*identity.User, error)
 	FindByUsernameGlobal(ctx context.Context, username string) (*identity.User, error)
 }
 
@@ -139,17 +140,11 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub, _ := claims["sub"].(string)
-	user, err := h.finder.FindByUsernameGlobal(r.Context(), sub)
-	// sub is the user ID string; if FindByUsernameGlobal doesn't find by ID,
-	// we construct a minimal user from claims for token re-issue.
+	userID, _ := claims["user_id"].(float64)
+	user, err := h.finder.GetByID(r.Context(), int64(userID))
 	if err != nil || user == nil {
-		tenantID, _ := claims["tenant_id"].(float64)
-		userID, _ := claims["user_id"].(float64)
-		user = &identity.User{
-			ID:       int64(userID),
-			TenantID: int64(tenantID),
-		}
+		response.Error(w, http.StatusUnauthorized, "user not found")
+		return
 	}
 
 	accessToken, refreshToken, err := h.issueTokens(user)
