@@ -186,3 +186,31 @@ func (s *Service) sign(payload []byte, secret string) string {
 	mac.Write(payload)
 	return hex.EncodeToString(mac.Sum(nil))
 }
+
+// ListDLQ returns failed webhook deliveries for a tenant.
+func (s *Service) ListDLQ(ctx context.Context, tenantID int64, offset, limit int) ([]*integration.WebhookDeliveryLog, int64, error) {
+	return s.logs.ListFailed(ctx, tenantID, offset, limit)
+}
+
+// RetryDLQ re-delivers a failed webhook event by ID.
+func (s *Service) RetryDLQ(ctx context.Context, id int64) error {
+	log, err := s.logs.GetByID(ctx, id)
+	if err != nil {
+		return fmt.Errorf("webhook: dlq entry not found: %w", err)
+	}
+	cfg, err := s.configs.GetByID(ctx, log.WebhookConfigID)
+	if err != nil || cfg == nil {
+		return fmt.Errorf("webhook: config %d not found", log.WebhookConfigID)
+	}
+	go func() {
+		s.sem <- struct{}{}
+		defer func() { <-s.sem }()
+		s.deliverToConfig(context.Background(), cfg, log.EventType, []byte(log.Payload))
+	}()
+	return nil
+}
+
+// PurgeDLQ removes failed deliveries older than the given time for a tenant.
+func (s *Service) PurgeDLQ(ctx context.Context, tenantID int64, before time.Time) (int64, error) {
+	return s.logs.PurgeBefore(ctx, tenantID, before)
+}

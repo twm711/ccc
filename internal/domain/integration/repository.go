@@ -1,6 +1,9 @@
 package integration
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 type DNCRepository interface {
 	Create(ctx context.Context, entry *DNCEntry) error
@@ -28,6 +31,10 @@ type WebhookConfigRepository interface {
 type WebhookDeliveryLogRepository interface {
 	Create(ctx context.Context, l *WebhookDeliveryLog) error
 	List(ctx context.Context, webhookConfigID int64, offset, limit int) ([]*WebhookDeliveryLog, int64, error)
+	ListFailed(ctx context.Context, tenantID int64, offset, limit int) ([]*WebhookDeliveryLog, int64, error)
+	GetByID(ctx context.Context, id int64) (*WebhookDeliveryLog, error)
+	Delete(ctx context.Context, id int64) error
+	PurgeBefore(ctx context.Context, tenantID int64, before time.Time) (int64, error)
 }
 
 type ScreenPopConfigRepository interface {

@@ -581,6 +581,10 @@ func main() {
 	imHub := imhub.NewHub(imSvc, logger)
 	agentHub := agenthub.NewHub(logger)
 	transcriptHub := transcripthub.NewHub(logger)
+	transcriptHub.SetSensitiveWords([]string{"投诉", "工信部", "315", "律师", "法院", "退款", "赔偿", "骗子"})
+	transcriptHub.OnAlert(func(ctx context.Context, callID int64, keyword, text string) {
+		logger.Error().Int64("call_id", callID).Str("keyword", keyword).Msg("realtime_qa: supervisor alert — sensitive word in live call")
+	})
 
 	// Phase 10 Repositories
 	annotationTaskRepo := infraMySQL.NewAnnotationTaskRepo(db)

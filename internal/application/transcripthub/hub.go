@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +35,15 @@ type Client struct {
 	Send   chan []byte
 }
 
+// AlertHook is called when a real-time QA sensitive word is detected.
+type AlertHook func(ctx context.Context, callID int64, keyword, text string)
+
 type Hub struct {
-	logger  zerolog.Logger
-	mu      sync.RWMutex
-	clients map[int64]map[*Client]bool // callID -> clients
+	logger        zerolog.Logger
+	mu            sync.RWMutex
+	clients       map[int64]map[*Client]bool // callID -> clients
+	sensitiveWords []string
+	alertHook     AlertHook
 }
 
 func NewHub(logger zerolog.Logger) *Hub {
@@ -46,6 +52,12 @@ func NewHub(logger zerolog.Logger) *Hub {
 		clients: make(map[int64]map[*Client]bool),
 	}
 }
+
+// SetSensitiveWords configures the real-time QA keyword list.
+func (h *Hub) SetSensitiveWords(words []string) { h.sensitiveWords = words }
+
+// OnAlert registers a hook fired when a sensitive word is detected.
+func (h *Hub) OnAlert(hook AlertHook) { h.alertHook = hook }
 
 func (h *Hub) StartBroadcast(ctx context.Context) {
 	<-ctx.Done()
@@ -73,6 +85,19 @@ func (h *Hub) Unregister(c *Client) {
 }
 
 func (h *Hub) Broadcast(callID int64, event TranscriptEvent) {
+	// Real-time QA: check for sensitive words before redaction.
+	if event.Text != "" && len(h.sensitiveWords) > 0 {
+		lower := strings.ToLower(event.Text)
+		for _, kw := range h.sensitiveWords {
+			if strings.Contains(lower, strings.ToLower(kw)) {
+				h.logger.Warn().Int64("call_id", callID).Str("keyword", kw).Msg("realtime_qa: sensitive word detected")
+				if h.alertHook != nil {
+					go h.alertHook(context.Background(), callID, kw, event.Text)
+				}
+				break
+			}
+		}
+	}
 	event.Text = redact.Text(event.Text)
 	data, err := json.Marshal(event)
 	if err != nil {

@@ -183,6 +183,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		r.Use(middleware.Auth(deps.JWTSecret))
 		r.Use(middleware.RateLimit(deps.RateLimiter, deps.TenantSettingsRepo, 100))
 		r.Use(middleware.AuditLog(deps.AuditLogRepo))
+		r.Use(middleware.PIIRedact())
 
 		// --- Phase 0 Routes ---
 

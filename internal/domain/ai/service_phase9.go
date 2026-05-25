@@ -1052,14 +1052,31 @@ func (s *ASRHotwordsService) List(ctx context.Context, tenantID int64) ([]*ASRHo
 	return s.repo.List(ctx, tenantID)
 }
 
+// ScorecardWeights defines per-metric weights for overall score calculation.
+type ScorecardWeights struct {
+	QA        float64 `json:"qa"`
+	CSAT      float64 `json:"csat"`
+	FCR       float64 `json:"fcr"`
+	Adherence float64 `json:"adherence"`
+}
+
+// DefaultScorecardWeights returns the default weights.
+func DefaultScorecardWeights() ScorecardWeights {
+	return ScorecardWeights{QA: 0.3, CSAT: 0.3, FCR: 0.2, Adherence: 0.2}
+}
+
 // PerformanceScorecardService manages agent performance scorecards.
 type PerformanceScorecardService struct {
-	repo PerformanceScorecardRepository
+	repo    PerformanceScorecardRepository
+	weights ScorecardWeights
 }
 
 func NewPerformanceScorecardService(repo PerformanceScorecardRepository) *PerformanceScorecardService {
-	return &PerformanceScorecardService{repo: repo}
+	return &PerformanceScorecardService{repo: repo, weights: DefaultScorecardWeights()}
 }
+
+// SetWeights overrides the default scoring weights.
+func (s *PerformanceScorecardService) SetWeights(w ScorecardWeights) { s.weights = w }
 
 type GenerateScorecardInput struct {
 	TenantID        int64   `json:"tenant_id"`
@@ -1074,8 +1091,8 @@ type GenerateScorecardInput struct {
 }
 
 func (s *PerformanceScorecardService) Generate(ctx context.Context, in GenerateScorecardInput) (*PerformanceScorecard, error) {
-	// Weighted overall score: QA 30%, CSAT 30%, FCR 20%, Adherence 20%
-	overall := in.AvgQAScore*0.3 + in.CSATScore*0.3 + in.FirstCallResolv*0.2 + in.Adherence*0.2
+	w := s.weights
+	overall := in.AvgQAScore*w.QA + in.CSATScore*w.CSAT + in.FirstCallResolv*w.FCR + in.Adherence*w.Adherence
 
 	sc := &PerformanceScorecard{
 		ID:              snowflake.NextID(),
@@ -1099,4 +1116,29 @@ func (s *PerformanceScorecardService) Generate(ctx context.Context, in GenerateS
 
 func (s *PerformanceScorecardService) List(ctx context.Context, tenantID int64, period string) ([]*PerformanceScorecard, error) {
 	return s.repo.List(ctx, tenantID, period)
+}
+
+// Rank returns scorecards for a period sorted by overall score descending, with rank assigned.
+func (s *PerformanceScorecardService) Rank(ctx context.Context, tenantID int64, period string) ([]*RankedScorecard, error) {
+	cards, err := s.repo.List(ctx, tenantID, period)
+	if err != nil {
+		return nil, err
+	}
+	// Sort by overall score descending.
+	for i := 1; i < len(cards); i++ {
+		for j := i; j > 0 && cards[j].OverallScore > cards[j-1].OverallScore; j-- {
+			cards[j], cards[j-1] = cards[j-1], cards[j]
+		}
+	}
+	ranked := make([]*RankedScorecard, len(cards))
+	for i, c := range cards {
+		ranked[i] = &RankedScorecard{Rank: i + 1, Scorecard: c}
+	}
+	return ranked, nil
+}
+
+// RankedScorecard wraps a scorecard with its rank position.
+type RankedScorecard struct {
+	Rank      int                   `json:"rank"`
+	Scorecard *PerformanceScorecard `json:"scorecard"`
 }

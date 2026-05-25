@@ -20,3 +20,15 @@ func Text(s string) string {
 	}
 	return s
 }
+
+var (
+	phoneRe = regexp.MustCompile(`\b(1[3-9]\d)\d{4}(\d{4})\b`)
+	idRe    = regexp.MustCompile(`\b(\d{6})\d{8}(\d{2}[\dXx]\d?)\b`)
+)
+
+// Mask partially masks PII for display (e.g. 138****1234, 110101********1234).
+func Mask(s string) string {
+	s = phoneRe.ReplaceAllString(s, "${1}****${2}")
+	s = idRe.ReplaceAllString(s, "${1}********${2}")
+	return s
+}

@@ -44,6 +44,16 @@ func (r *stubLogRepo) Create(_ context.Context, _ *integration.WebhookDeliveryLo
 func (r *stubLogRepo) List(_ context.Context, _ int64, _, _ int) ([]*integration.WebhookDeliveryLog, int64, error) {
 	return nil, 0, nil
 }
+func (r *stubLogRepo) ListFailed(_ context.Context, _ int64, _, _ int) ([]*integration.WebhookDeliveryLog, int64, error) {
+	return nil, 0, nil
+}
+func (r *stubLogRepo) GetByID(_ context.Context, _ int64) (*integration.WebhookDeliveryLog, error) {
+	return nil, nil
+}
+func (r *stubLogRepo) Delete(_ context.Context, _ int64) error { return nil }
+func (r *stubLogRepo) PurgeBefore(_ context.Context, _ int64, _ time.Time) (int64, error) {
+	return 0, nil
+}
 
 // --- tests ---
 

@@ -1,6 +1,9 @@
 package report
 
-import "context"
+import (
+	"context"
+	"math"
+)
 
 // DashboardService computes derived dashboard metrics.
 type DashboardService struct {
@@ -107,4 +110,72 @@ func (s *ReportService) AgentStatusLogQuery(ctx context.Context, f ReportFilter,
 
 func (s *ReportService) CampaignReport(ctx context.Context, f ReportFilter) ([]*CampaignReport, int64, error) {
 	return s.campaigns.Query(ctx, f)
+}
+
+// --- WFM: Erlang C traffic forecasting ---
+
+// ErlangCInput contains parameters for Erlang C staffing calculation.
+type ErlangCInput struct {
+	CallsPerHour   float64 // λ: arrival rate
+	AvgHandleSec   float64 // average handle time in seconds
+	ServiceLevelPct float64 // target SL% (e.g. 80)
+	TargetAnswerSec float64 // target answer time in seconds (e.g. 20)
+}
+
+// ErlangCResult contains the staffing recommendation.
+type ErlangCResult struct {
+	TrafficIntensity float64 // A = λ * AHT / 3600
+	MinAgents        int     // minimum agents to handle load
+	RecommendedAgents int    // agents needed to meet SL target
+	ExpectedSL       float64 // expected service level with recommended agents
+}
+
+// ErlangC computes the recommended number of agents using the Erlang C formula.
+func ErlangC(in ErlangCInput) ErlangCResult {
+	if in.CallsPerHour <= 0 || in.AvgHandleSec <= 0 {
+		return ErlangCResult{}
+	}
+	a := in.CallsPerHour * in.AvgHandleSec / 3600.0 // traffic intensity (Erlangs)
+	minN := int(math.Ceil(a))
+	if minN < 1 {
+		minN = 1
+	}
+
+	for n := minN; n <= minN+200; n++ {
+		ec := erlangCProb(a, n)
+		sl := 1.0 - ec*math.Exp(-float64(n-int(math.Ceil(a)))*in.TargetAnswerSec/in.AvgHandleSec)
+		if sl < 0 {
+			sl = 0
+		}
+		if sl*100 >= in.ServiceLevelPct {
+			return ErlangCResult{
+				TrafficIntensity:  a,
+				MinAgents:         minN,
+				RecommendedAgents: n,
+				ExpectedSL:        math.Round(sl*10000) / 100,
+			}
+		}
+	}
+	return ErlangCResult{TrafficIntensity: a, MinAgents: minN, RecommendedAgents: minN + 200}
+}
+
+// erlangCProb computes the Erlang C probability (probability of queuing).
+func erlangCProb(a float64, n int) float64 {
+	if n <= 0 || a <= 0 {
+		return 0
+	}
+	// Compute A^N / N! iteratively to avoid overflow
+	sumTerm := 1.0 // k=0 term
+	aN_Nfact := 1.0
+	for k := 1; k <= n; k++ {
+		aN_Nfact *= a / float64(k)
+		if k < n {
+			sumTerm += aN_Nfact
+		}
+	}
+	last := aN_Nfact * float64(n) / (float64(n) - a)
+	if float64(n) <= a {
+		return 1.0
+	}
+	return last / (sumTerm + last)
 }
